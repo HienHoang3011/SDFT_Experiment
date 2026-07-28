@@ -20,7 +20,7 @@ def parse_args():
                         help="Batch size per GPU for training")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8,
                         help="Number of update steps to accumulate before performing a backward/update pass")
-    parser.add_argument("--learning_rate", type=float, default=2e-5,
+    parser.add_argument("--learning_rate", type=float, default=5e-5,
                         help="Learning rate")
     parser.add_argument("--num_train_epochs", type=int, default=1,
                         help="Number of training epochs")
@@ -32,27 +32,32 @@ def parse_args():
                         help="Enable vLLM generation acceleration if installed")
     return parser.parse_args()
 
-def prepare_train_dataset(dataset_path):
+def prepare_train_dataset(dataset_path, model_name_or_path):
     print(f"Loading train dataset from {dataset_path}")
     dataset = Dataset.load_from_disk(dataset_path)
+    from transformers import AutoTokenizer
+    import re
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     
     # Train data thực tế của bạn có các cột: 'messages', 'output_text'
     # SDFT yêu cầu bắt buộc: 'prompt', 'privileged_context'
     if "messages" in dataset.column_names:
         dataset = dataset.rename_column("messages", "prompt")
-    if "output_text" in dataset.column_names:
-        dataset = dataset.rename_column("output_text", "privileged_context")
         
-    def join_messages(example):
+    def create_privileged_context(example):
+        match = re.search(r'<answer>\s*(.*?)\s*</answer>', example['output_text'], flags=re.DOTALL)
+        ans = match.group(1).strip() if match else "unknown"
+        example["privileged_context"] = f"Hint: The correct answer is {ans}."
+        
         if isinstance(example["prompt"], list):
-            prompt_str = ""
-            for msg in example["prompt"]:
-                prompt_str += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
-            prompt_str += "<|im_start|>assistant\n"
-            example["prompt"] = prompt_str
+            example["prompt"] = tokenizer.apply_chat_template(
+                example["prompt"], 
+                tokenize=False, 
+                add_generation_prompt=True
+            )
         return example
         
-    dataset = dataset.map(join_messages, desc="Joining prompt messages")
+    dataset = dataset.map(create_privileged_context, desc="Creating hints and formatting prompts")
         
     return dataset
 
@@ -70,7 +75,8 @@ def main():
     args = parse_args()
     
     # 1. Chuẩn bị dữ liệu dựa theo schema thực tế trong file .arrow
-    full_train_dataset = prepare_train_dataset(args.train_data_path)
+    # 2. Chuẩn bị dataset
+    full_train_dataset = prepare_train_dataset(args.train_data_path, args.model_name_or_path)
     
     # Kích thước tập dữ liệu
     total_examples = len(full_train_dataset)
@@ -121,15 +127,15 @@ def main():
         save_strategy="steps",
         save_steps=0.2,
         report_to="none",
-        bf16=False,
-        fp16=True
+        bf16=True,
+        fp16=False
 
     )
     
     # 3. Cấu hình LoRA (PEFT)
     peft_config = LoraConfig(
-        r=64,
-        lora_alpha=128,
+        r=128,
+        lora_alpha=256,
         lora_dropout=0.05,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         task_type="CAUSAL_LM",
@@ -148,6 +154,12 @@ def main():
         peft_config=peft_config, # Truyền LoRA vào SDFTTrainer
     )
     
+    # Ép SDFTTrainer sinh bằng Greedy Decoding
+    if hasattr(trainer, "generation_kwargs"):
+        trainer.generation_kwargs["do_sample"] = False
+        trainer.generation_kwargs.pop("temperature", None)
+        trainer.generation_kwargs.pop("top_p", None)
+        
     # 5. Chạy Training
     print("\nBắt đầu quá trình huấn luyện SDFT...")
     trainer.train()
