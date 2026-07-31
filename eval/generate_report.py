@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def load_json(path):
-    """Đọc file json, trả về dict hoặc None nếu không tồn tại."""
     if not path or not os.path.exists(path):
         return None
     try:
@@ -15,18 +14,15 @@ def load_json(path):
         return None
 
 def extract_metrics(new_task_path, prior_task_path):
-    """Trích xuất accuracy từ 2 file kết quả."""
     new_res = load_json(new_task_path)
     prior_res = load_json(prior_task_path)
     
-    # Lấy điểm, giả sử điểm trong khoảng [0, 1], ta nhân 100 để đổi ra %
     new_acc = new_res.get("accuracy", 0.0) * 100 if new_res else 0.0
     prior_acc = prior_res.get("average_score", 0.0) * 100 if prior_res else 0.0
     
     return new_acc, prior_acc, prior_res
 
 def print_table(models):
-    """In bảng so sánh ra terminal."""
     print("\n" + "=" * 75)
     print(f"{'MÔ HÌNH':<15} | {'NEW TASK ACCURACY (%)':<25} | {'PRIOR TASKS PERFORMANCE (%)':<25}")
     print("-" * 75)
@@ -36,41 +32,48 @@ def print_table(models):
         print(f"{name:<15} | {new_acc:<25.2f} | {prior_acc:<25.2f}")
     print("=" * 75 + "\n")
 
-def generate_report(base_new_task, base_prior_task, 
-                   sdft_new_task, sdft_prior_task, 
+def generate_report(base_new_task=None, base_prior_task=None, 
+                   sdft_new_task=None, sdft_prior_task=None, 
+                   sft_new_task=None, sft_prior_task=None,
+                   steer_new_task=None, steer_prior_task=None,
                    output_dir="reports"):
-    """
-    Hàm chính tạo báo cáo so sánh.
-    """
-    os.makedirs(output_dir, exist_ok=True)
     
+    os.makedirs(output_dir, exist_ok=True)
     models = {}
     
-    # 1. Load Base Model
     b_new, b_prior, b_prior_res = extract_metrics(base_new_task, base_prior_task)
-    if b_new == 0.0 and b_prior == 0.0:
-        print("CẢNH BÁO: Không tìm thấy dữ liệu Base Model, sử dụng điểm giả định (0.0).")
-    models["Base Model"] = {"New Task Accuracy": b_new, "Prior Tasks Performance": b_prior, "Prior Details": b_prior_res}
+    if b_new > 0.0 or b_prior > 0.0:
+        models["Base Model"] = {"New Task Accuracy": b_new, "Prior Tasks Performance": b_prior, "Prior Details": b_prior_res}
     
-    # 2. Load SDFT Model
     s_new, s_prior, s_prior_res = extract_metrics(sdft_new_task, sdft_prior_task)
-    models["SDFT"] = {"New Task Accuracy": s_new, "Prior Tasks Performance": s_prior, "Prior Details": s_prior_res}
+    if s_new > 0.0 or s_prior > 0.0:
+        models["SDFT"] = {"New Task Accuracy": s_new, "Prior Tasks Performance": s_prior, "Prior Details": s_prior_res}
+
+    sft_new, sft_prior, sft_prior_res = extract_metrics(sft_new_task, sft_prior_task)
+    if sft_new > 0.0 or sft_prior > 0.0:
+        models["SFT"] = {"New Task Accuracy": sft_new, "Prior Tasks Performance": sft_prior, "Prior Details": sft_prior_res}
         
-    # In dạng bảng
+    steer_new, steer_prior, steer_prior_res = extract_metrics(steer_new_task, steer_prior_task)
+    if steer_new > 0.0 or steer_prior > 0.0:
+        models["Steered SFT"] = {"New Task Accuracy": steer_new, "Prior Tasks Performance": steer_prior, "Prior Details": steer_prior_res}
+        
+    if not models:
+        print("CẢNH BÁO: Không có dữ liệu của bất kỳ model nào để vẽ biểu đồ.")
+        return
+
     print_table(models)
     
-    # Vẽ dạng biểu đồ
     try:
-        colors = {"Base Model": "#999999", "SDFT": "#2b7bba"}
+        colors = {"Base Model": "#999999", "SDFT": "#2b7bba", "SFT": "#d62728", "Steered SFT": "#2ca02c"}
         
-        # Plot 1: Scatter plot (Overall)
+        # Plot 1: Scatter plot
         plt.figure(figsize=(9, 6))
         plt.style.use('bmh')
         ax = plt.gca()
         ax.set_facecolor('#f4f4f4')
         
-        base_x = models["Base Model"]["New Task Accuracy"]
-        base_y = models["Base Model"]["Prior Tasks Performance"]
+        base_x = models.get("Base Model", {}).get("New Task Accuracy", None)
+        base_y = models.get("Base Model", {}).get("Prior Tasks Performance", None)
         
         for name, data in models.items():
             x = data["New Task Accuracy"]
@@ -85,50 +88,58 @@ def generate_report(base_new_task, base_prior_task,
             else:
                 plt.text(x + offset_x, y, name, fontsize=10, ha='left', va='center', fontweight='bold')
             
-            if name != "Base Model" and (x != base_x or y != base_y):
-                ax.annotate('', xy=(x, y), xytext=(base_x, base_y),
-                            arrowprops=dict(facecolor=colors.get(name, "blue"), edgecolor=colors.get(name, "blue"), 
-                                            width=2.5, headwidth=9, headlength=12, alpha=0.7, shrink=0.03),
-                            zorder=3)
+            if name != "Base Model" and base_x is not None and base_y is not None:
+                if (x != base_x or y != base_y):
+                    ax.annotate('', xy=(x, y), xytext=(base_x, base_y),
+                                arrowprops=dict(facecolor=colors.get(name, "blue"), edgecolor=colors.get(name, "blue"), 
+                                                width=2.5, headwidth=9, headlength=12, alpha=0.7, shrink=0.03),
+                                zorder=3)
                 
         plt.xlabel("New Task Accuracy (%)", fontsize=12, fontweight='bold')
         plt.ylabel("Prior Tasks Performance (%)", fontsize=12, fontweight='bold')
-        plt.title("Performance Comparison (SDFT vs Base)", fontsize=14, fontweight='bold')
+        plt.title("Performance Comparison", fontsize=14, fontweight='bold')
         
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         
         all_x = [m["New Task Accuracy"] for m in models.values()]
         all_y = [m["Prior Tasks Performance"] for m in models.values()]
-        x_range = max(all_x) - min(all_x)
-        y_range = max(all_y) - min(all_y)
-        
-        plt.xlim(min(all_x) - max(2, x_range*0.2), max(all_x) + max(5, x_range*0.3))
-        plt.ylim(min(all_y) - max(2, y_range*0.2), max(all_y) + max(2, y_range*0.2))
+        if all_x and all_y:
+            x_range = max(all_x) - min(all_x)
+            y_range = max(all_y) - min(all_y)
+            
+            plt.xlim(min(all_x) - max(2, x_range*0.2), max(all_x) + max(5, x_range*0.3))
+            plt.ylim(min(all_y) - max(2, y_range*0.2), max(all_y) + max(2, y_range*0.2))
         
         plot_path = os.path.join(output_dir, "sdft_performance_plot.png")
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Đã lưu biểu đồ tổng quát thành công tại: {plot_path}")
 
-        # Plot 2: Bar chart (Prior Tasks Breakdown)
-        if b_prior_res and s_prior_res:
+        # Plot 2: Bar chart
+        models_with_details = {k: v for k, v in models.items() if v["Prior Details"] is not None}
+        if len(models_with_details) > 0:
             categories = ["hellaswag", "mmlu", "truthfulqa_mc2", "winogrande", "ifeval", "humaneval", "truthfulqa_gen"]
             labels = ["HellaSwag", "MMLU", "TruthfulQA", "WinoGrande", "IFEval", "HumanEval", "TruthfulQA Gen"]
             
-            b_scores = [b_prior_res.get(c, 0.0) * 100 for c in categories]
-            s_scores = [s_prior_res.get(c, 0.0) * 100 for c in categories]
-            
             x_pos = np.arange(len(labels))
-            width = 0.35
+            num_models = len(models_with_details)
+            total_width = 0.8
+            width = total_width / num_models
             
-            plt.figure(figsize=(10, 6))
+            plt.figure(figsize=(12, 6))
             plt.style.use('bmh')
             ax = plt.gca()
             ax.set_facecolor('#f4f4f4')
             
-            rects1 = ax.bar(x_pos - width/2, b_scores, width, label='Base Model', color=colors["Base Model"])
-            rects2 = ax.bar(x_pos + width/2, s_scores, width, label='SDFT', color=colors["SDFT"])
+            start_x = x_pos - (total_width / 2) + (width / 2)
+            
+            rects_list = []
+            for idx, (name, data) in enumerate(models_with_details.items()):
+                details = data["Prior Details"]
+                scores = [details.get(c, 0.0) * 100 for c in categories]
+                rects = ax.bar(start_x + idx * width, scores, width, label=name, color=colors.get(name, "blue"))
+                rects_list.append(rects)
             
             ax.set_ylabel('Accuracy (%)', fontsize=12, fontweight='bold')
             ax.set_title('Prior Tasks Performance Breakdown', fontsize=14, fontweight='bold')
@@ -139,14 +150,15 @@ def generate_report(base_new_task, base_prior_task,
             def autolabel(rects):
                 for rect in rects:
                     height = rect.get_height()
-                    ax.annotate(f'{height:.1f}',
-                                xy=(rect.get_x() + rect.get_width() / 2, height),
-                                xytext=(0, 3),
-                                textcoords="offset points",
-                                ha='center', va='bottom', fontsize=9)
+                    if height > 0:
+                        ax.annotate(f'{height:.1f}',
+                                    xy=(rect.get_x() + rect.get_width() / 2, height),
+                                    xytext=(0, 3),
+                                    textcoords="offset points",
+                                    ha='center', va='bottom', fontsize=8, rotation=90)
             
-            autolabel(rects1)
-            autolabel(rects2)
+            for rects in rects_list:
+                autolabel(rects)
             
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
@@ -167,4 +179,8 @@ if __name__ == "__main__":
         base_prior_task="outputs/base_prior_eval/previous_capabilities_summary.json",
         sdft_new_task="outputs/sdft_science_eval/eval_results.json",
         sdft_prior_task="outputs/sdft_prior_eval/previous_capabilities_summary.json",
+        sft_new_task="outputs/sft_science_eval/eval_results.json",
+        sft_prior_task="outputs/sft_prior_eval/previous_capabilities_summary.json",
+        steer_new_task="outputs/steer_science_eval/eval_results.json",
+        steer_prior_task="outputs/steer_prior_eval/previous_capabilities_summary.json",
     )
