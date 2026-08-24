@@ -8,6 +8,7 @@ wheels/
 outputs/
 reports/
 *.log
+ouputs/
 # Virtual environments
 .venv
 

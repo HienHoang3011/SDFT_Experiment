@@ -5,9 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "bitsandbytes>=0.50.0",
     "datasets>=5.0.0",
+    "huggingface_hub>=0.20.0",
     "immutabledict>=4.3.1",
     "langdetect>=1.0.9",
+    "liger-kernel>=0.8.1",
     "lm-eval>=0.4.12",
     "matplotlib>=3.11.0",
     "peft>=0.19.1",

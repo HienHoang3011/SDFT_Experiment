@@ -39,6 +39,10 @@ def main():
     print(f"Bắt đầu đánh giá mô hình {args.model_path} trên các task:")
     print(", ".join(tasks))
     
+    # Cố định sử dụng backend Hugging Face (hf) thay vì vLLM
+    # để tương thích tốt nhất với cả base model và các PEFT/LoRA adapters (SFT, Steered)
+    backend_name = "hf"
+
     # Thiết lập tham số model cho lm_eval
     # Kiểm tra xem đây có phải là mô hình PEFT không
     is_peft = os.path.exists(os.path.join(args.model_path, "adapter_config.json"))
@@ -46,20 +50,16 @@ def main():
         with open(os.path.join(args.model_path, "adapter_config.json"), "r") as f:
             config = json.load(f)
         base_model = config.get("base_model_name_or_path")
-        model_args = f"pretrained={base_model},peft={args.model_path},dtype=auto"
+        model_args = f"pretrained={base_model},peft={args.model_path},dtype=auto,parallelize=True"
     else:
-        model_args = f"pretrained={args.model_path},dtype=auto"
-
-    if args.backend == "vllm":
-        model_args += ",tensor_parallel_size=1" 
-        # Cập nhật tensor_parallel_size nếu chạy trên nhiều GPU
+        model_args = f"pretrained={args.model_path},dtype=auto,parallelize=True"
 
     # Để đánh giá HumanEval bằng thư viện, đôi khi cần thiết lập biến môi trường
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
     # Chạy đánh giá
     results = lm_eval.simple_evaluate(
-        model=args.backend,
+        model=backend_name,
         model_args=model_args,
         tasks=tasks,
         batch_size=args.batch_size,
