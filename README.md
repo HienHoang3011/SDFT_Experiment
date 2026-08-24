@@ -4,8 +4,9 @@ This project implements the Self-Distilled Fine-Tuning (SDFT) approach for conti
 
 ## Dataset Information
 
-- **Train Data:** 2,674 examples (Used for training. During training, it is automatically split into ~2,139 train / ~535 validation examples).
-- **Eval Data (Test):** 507 examples (Used strictly as a held-out test set to evaluate New Task Accuracy).
+- **Dataset:** GBaker/MedQA-USMLE-4-options
+- **Train Data:** 10,178 examples (Used for training. During training, it is automatically split into ~9,160 train / ~1,018 validation examples).
+- **Eval Data (Test):** 1,273 examples (Used strictly as a held-out test set to evaluate New Task Accuracy).
 
 ## Installation
 
@@ -27,10 +28,10 @@ uv add datasets trl peft matplotlib lm-eval transformers torch
 ## Pipeline Execution
 
 To run the entire end-to-end pipeline, which includes:
-1. Training the model using SDFT.
-2. Evaluating the Science Task (New Task) and Prior Capabilities (Old Tasks) for the Base Model.
-3. Evaluating the Science Task and Prior Capabilities for the SDFT Finetuned Model.
-4. Generating a comparative report and visualization plot.
+1. Training models using different approaches: Full SFT, SFT LoRA, FAPM, Steered SFT, and Steered SFT Full.
+2. Evaluating the MedQA Task (New Task) and Prior Capabilities (Old Tasks) for the Base Model.
+3. Evaluating the MedQA Task and Prior Capabilities for all the trained models (SFT, SFT LoRA, FAPM, Steered SFT, Steered SFT Full).
+4. Generating a comparative report and visualization plot across all methods.
 
 Run the following command:
 
