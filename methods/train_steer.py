@@ -1,5 +1,4 @@
 import argparse
-import os
 import math
 import torch
 import torch.nn.functional as F
@@ -7,48 +6,68 @@ from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig
 
-def _build_steered_trainer_class(sft_trainer_cls):
-    class SteeredTrainer(sft_trainer_cls):
-        def __init__(self, *args, x_factor=0.2, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.margin = math.log(1 + x_factor)
+def build_steered_loss(x_factor):
+    """Build a Trainer-compatible steered loss function."""
+    if x_factor <= -1.0:
+        raise ValueError("x_factor must be greater than -1.0")
 
-        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-            forward_inputs = {k: v for k, v in inputs.items() if k != "labels"}
-            outputs = model(**forward_inputs)
-            
-            logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
-            labels = inputs.get("labels")
+    margin = math.log1p(x_factor)
 
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
+    def steered_loss(outputs, labels, num_items_in_batch=None):
+        if labels is None:
+            raise ValueError("Steered loss requires labels")
 
-            shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-            shift_labels = shift_labels.view(-1)
+        logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+        shift_logits = logits[..., :-1, :]
+        shift_labels = labels[..., 1:]
 
-            mask = shift_labels != -100
-            active_logits = shift_logits[mask]
-            active_labels = shift_labels[mask]
+        flat_logits = shift_logits.reshape(-1, shift_logits.size(-1))
+        flat_labels = shift_labels.reshape(-1)
+        active_mask = flat_labels.ne(-100)
 
-            with torch.no_grad():
-                target_logits = active_logits.clone()
-                temp_logits = target_logits.clone()
-                batch_idx = torch.arange(target_logits.size(0), device=target_logits.device)
-                temp_logits[batch_idx, active_labels] = float('-inf')
+        # A fully masked micro-batch can occur after truncation. Return a zero
+        # that stays connected to the graph so backward/DDP remain valid.
+        if not active_mask.any():
+            return logits.sum() * 0.0
 
-                max_other_logits, _ = torch.max(temp_logits, dim=-1)
-                current_gt_logits = target_logits[batch_idx, active_labels]
+        # Compute the KL in fp32: this loss can be very small once the margin is
+        # satisfied, so bf16 precision is not sufficient here.
+        active_logits = flat_logits[active_mask].float()
+        active_labels = flat_labels[active_mask]
 
-                target_gt_logits = torch.max(current_gt_logits, max_other_logits + self.margin)
-                target_logits[batch_idx, active_labels] = target_gt_logits
+        with torch.no_grad():
+            target_logits = active_logits.detach().clone()
+            other_logits = target_logits.clone()
+            row_indices = torch.arange(target_logits.size(0), device=target_logits.device)
+            other_logits[row_indices, active_labels] = float("-inf")
 
-                target_probs = F.softmax(target_logits, dim=-1)
+            max_other_logits = other_logits.max(dim=-1).values
+            current_gt_logits = target_logits[row_indices, active_labels]
+            target_logits[row_indices, active_labels] = torch.maximum(
+                current_gt_logits,
+                max_other_logits + margin,
+            )
+            target_probs = F.softmax(target_logits, dim=-1)
 
-            log_probs = F.log_softmax(active_logits, dim=-1)
-            loss = F.kl_div(log_probs, target_probs, reduction='batchmean')
+        log_probs = F.log_softmax(active_logits, dim=-1)
+        loss_sum = F.kl_div(log_probs, target_probs, reduction="sum")
 
-            return (loss, outputs) if return_outputs else loss
-    return SteeredTrainer
+        # During training, Transformers supplies the number of valid tokens in
+        # the whole accumulated batch. Dividing by it makes gradient
+        # accumulation equivalent to one large batch. Evaluation calls may not
+        # supply it, in which case a local token mean is the correct reduction.
+        if num_items_in_batch is None:
+            denominator = active_mask.sum().to(device=loss_sum.device, dtype=loss_sum.dtype)
+        else:
+            denominator = torch.as_tensor(
+                num_items_in_batch,
+                device=loss_sum.device,
+                dtype=loss_sum.dtype,
+            )
+
+        return loss_sum / denominator.clamp_min(1.0)
+
+    return steered_loss
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Steered SFT Training")
@@ -58,27 +77,36 @@ def parse_args():
     parser.add_argument("--dev_data_path", type=str, default="data/medqa_data/dev_data")
     parser.add_argument("--output_dir", type=str, default="outputs/steer-qwen2.5-7b")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1)
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--num_train_epochs", type=int, default=3)
     parser.add_argument("--max_seq_length", type=int, default=2048)
+    parser.add_argument("--x_factor", type=float, default=1.0)
     parser.add_argument("--disable_peft", action="store_true", help="Vô hiệu hóa LoRA (Full Fine-Tuning)")
     return parser.parse_args()
 
-def prepare_train_dataset(dataset_path, model_name_or_path):
+def prepare_train_dataset(dataset_path):
     print(f"Loading train dataset from {dataset_path}")
     dataset = Dataset.load_from_disk(dataset_path)
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     
     def format_messages(example):
-        msgs = example.get("messages", example.get("prompt", []))
-        if isinstance(msgs, list):
-            msgs_copy = list(msgs)
-            msgs_copy.append({"role": "assistant", "content": example["output_text"]})
+        msgs = example.get("messages")
+        output_text = str(example["output_text"])
+
+        if isinstance(msgs, list) and msgs:
+            msgs_copy = [dict(message) for message in msgs]
+            if msgs_copy[-1].get("role") == "assistant":
+                if str(msgs_copy[-1].get("content", "")) != output_text:
+                    raise ValueError("The final assistant message does not match output_text")
+            else:
+                msgs_copy.append({"role": "assistant", "content": output_text})
             example["messages"] = msgs_copy
         else:
-            example["messages"] = [{"role": "user", "content": str(msgs)}, {"role": "assistant", "content": str(example["output_text"])}]
+            example["messages"] = [
+                {"role": "user", "content": str(example.get("prompt", ""))},
+                {"role": "assistant", "content": output_text},
+            ]
         return example
         
     dataset = dataset.map(format_messages, desc="Formatting conversation messages")
@@ -92,17 +120,24 @@ def prepare_train_dataset(dataset_path, model_name_or_path):
 def main():
     args = parse_args()
     
-    train_dataset = prepare_train_dataset(args.train_data_path, args.model_name_or_path)
-    eval_dataset = prepare_train_dataset(args.dev_data_path, args.model_name_or_path)
+    train_dataset = prepare_train_dataset(args.train_data_path)
+    eval_dataset = prepare_train_dataset(args.dev_data_path)
     
     training_args = SFTConfig(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
+        per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         num_train_epochs=args.num_train_epochs,
         max_length=args.max_seq_length,
         assistant_only_loss=True,
+        # A custom logits-based loss needs the regular LM head output. Keeping
+        # TRL's default chunked_nll would patch a labels-only path that this
+        # compute_loss_func cannot use.
+        loss_type="nll",
+        model_init_kwargs={"dtype": "bfloat16"},
+        average_tokens_across_devices=True,
         warmup_ratio=0.1,
         lr_scheduler_type="cosine",
         max_grad_norm=1.0,
@@ -136,15 +171,14 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    trainer_class = _build_steered_trainer_class(SFTTrainer)
-    trainer = trainer_class(
+    trainer = SFTTrainer(
         model=args.model_name_or_path,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=peft_config,
         processing_class=tokenizer,
-        x_factor=1.0
+        compute_loss_func=build_steered_loss(args.x_factor),
     )
     
     print("\nBắt đầu quá trình huấn luyện Steered SFT...")
