@@ -16,12 +16,12 @@ def run_command(command, description):
 
 def main():
     parser = argparse.ArgumentParser(description="End-to-End SDFT, SFT and Steered SFT Pipeline")
-    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--sft_model", type=str, default="outputs/sft-qwen2.5-7b")
-    parser.add_argument("--sft_lora_model", type=str, default="outputs/sft-lora-qwen2.5-7b")
-    parser.add_argument("--fapm_model", type=str, default="outputs/fapm-qwen2.5-7b")
-    parser.add_argument("--steer_model", type=str, default="outputs/steer-qwen2.5-7b")
-    parser.add_argument("--steer_full_model", type=str, default="outputs/steer-full-qwen2.5-7b")
+    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2-7B-Instruct")
+    parser.add_argument("--sft_model", type=str, default="outputs/sft-qwen2-7b")
+    parser.add_argument("--sft_lora_model", type=str, default="outputs/sft-lora-qwen2-7b")
+    parser.add_argument("--fapm_model", type=str, default="outputs/fapm-qwen2-7b")
+    parser.add_argument("--steer_model", type=str, default="outputs/steer-qwen2-7b")
+    parser.add_argument("--steer_full_model", type=str, default="outputs/steer-full-qwen2-7b")
     
     parser.add_argument("--skip_train_sft", action="store_true")
     parser.add_argument("--skip_train_sft_lora", action="store_true")

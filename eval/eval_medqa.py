@@ -133,11 +133,11 @@ def evaluate_correctness(responses, answers, prompts=None):
     Returns list of scores (1 for correct, 0 for incorrect).
     """
     results = []
-    for i, (response, answer) in enumerate(zip(responses, answers)):
-        if "<answer>" in response:
-            extracted = extract_xml_answer(response)
-            results.append(1 if extracted == answer else 0)
-            continue
+    for i, (full_response, answer) in enumerate(zip(responses, answers)):
+        if "<answer>" in full_response:
+            eval_text = extract_xml_answer(full_response)
+        else:
+            eval_text = full_response
             
         is_correct = 0
         prompt_text = ""
@@ -158,19 +158,31 @@ def evaluate_correctness(responses, answers, prompts=None):
                 if answer.lower() in opt_text.lower() or opt_text.lower() in answer.lower():
                     correct_letter = line[0].upper()
                     
+        clean_eval = eval_text.strip().strip('.').lower()
+        clean_answer = answer.strip().strip('.').lower()
+        
+        # Fair direct comparison
+        if clean_eval == clean_answer:
+            results.append(1)
+            continue
+            
         if correct_letter:
-            match = re.search(r'(?i)answer is\s*:?\s*([A-E])\b', response)
+            if clean_eval == correct_letter.lower():
+                results.append(1)
+                continue
+                
+            match = re.search(r'(?i)answer is\s*:?\s*([A-E])\b', eval_text)
             if match:
                 if match.group(1).upper() == correct_letter:
                     is_correct = 1
             else:
-                appearances = [opt for opt in all_options if opt.lower() in response.lower()]
+                appearances = [opt for opt in all_options if opt.lower() in eval_text.lower()]
                 if len(appearances) == 1 and appearances[0].lower() == answer.lower():
                     is_correct = 1
-                elif re.search(rf'\b{correct_letter}\.\s', response) or re.search(rf'^[A-E]\.\s*{re.escape(answer)}', response, re.IGNORECASE | re.MULTILINE):
+                elif re.search(rf'\b{correct_letter}\.\s', eval_text) or re.search(rf'^[A-E]\.\s*{re.escape(answer)}', eval_text, re.IGNORECASE | re.MULTILINE):
                     is_correct = 1
         else:
-            if answer.lower() in response.lower():
+            if answer.lower() in eval_text.lower() and len(eval_text) < len(answer) + 50:
                 is_correct = 1
                 
         results.append(is_correct)
