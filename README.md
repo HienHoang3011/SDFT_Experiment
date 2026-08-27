@@ -43,7 +43,7 @@ uv run python main.py
 You can specify a different base model or output directory when running the pipeline:
 
 ```bash
-uv run python main.py --base_model "Qwen/Qwen2.5-7B-Instruct" --output_model_dir "outputs/sdft-qwen2.5-7b"
+uv run python main.py --base_model "Qwen/Qwen2-7B"
 ```
 
 ## Generated Reports

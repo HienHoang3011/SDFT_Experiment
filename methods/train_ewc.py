@@ -7,12 +7,12 @@ from trl import SFTTrainer, SFTConfig
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Elastic Weight Consolidation (EWC) Full Fine-Tuning")
-    parser.add_argument("--model_name_or_path", type=str, default="Qwen/Qwen2.5-7B-Instruct")
+    parser.add_argument("--model_name_or_path", type=str, default="Qwen/Qwen2-7B")
     parser.add_argument("--train_data_path", type=str, default="data/medqa_data/train_data")
     parser.add_argument("--dev_data_path", type=str, default="data/medqa_data/dev_data")
     parser.add_argument("--fisher_data_path", type=str, default=None, 
                         help="Dataset để tính Fisher. Nếu None, dùng Ma trận Đơn vị (L2 Regularization)")
-    parser.add_argument("--output_dir", type=str, default="outputs/ewc-qwen2.5-7b")
+    parser.add_argument("--output_dir", type=str, default="outputs/ewc-qwen2-7b")
     parser.add_argument("--ewc_lambda", type=float, default=100.0, help="Hệ số phạt EWC")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=32)

@@ -2,10 +2,15 @@ import argparse
 import os
 from datasets import Dataset, DatasetDict
 from trl import SFTConfig, SFTTrainer
+from qwen2_base import (
+    QWEN2_BASE_MODEL_ID,
+    configure_qwen2_base_tokenizer,
+    sync_model_special_tokens,
+)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run SFT Training with LoRA")
-    parser.add_argument("--model_name_or_path", type=str, default="Qwen/Qwen2.5-7B-Instruct",
+    parser.add_argument("--model_name_or_path", type=str, default=QWEN2_BASE_MODEL_ID,
                         help="Path to the model or HF model name")
     parser.add_argument("--train_data_path", type=str, default="data/medqa_data/train_data",
                         help="Path to the train dataset (HF disk format)")
@@ -13,7 +18,7 @@ def parse_args():
                         help="Path to the eval dataset (HF disk format)")
     parser.add_argument("--dev_data_path", type=str, default="data/medqa_data/dev_data",
                         help="Path to the dev dataset for validation during training")
-    parser.add_argument("--output_dir", type=str, default="outputs/sft-qwen2.5-7b",
+    parser.add_argument("--output_dir", type=str, default="outputs/sft-qwen2-7b",
                         help="Directory to save the trained model")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1,
                         help="Batch size per GPU for training")
@@ -27,21 +32,26 @@ def parse_args():
                         help="Maximum sequence length")
     return parser.parse_args()
 
-def prepare_train_dataset(dataset_path, model_name_or_path):
+def prepare_train_dataset(dataset_path):
     print(f"Loading train dataset from {dataset_path}")
     dataset = Dataset.load_from_disk(dataset_path)
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     
     def format_messages(example):
-        msgs = example.get("messages", example.get("prompt", []))
-        if isinstance(msgs, list):
-            # Append the assistant's answer to the conversation
-            msgs_copy = list(msgs)
-            msgs_copy.append({"role": "assistant", "content": example["output_text"]})
+        msgs = example.get("messages")
+        output_text = str(example["output_text"])
+        if isinstance(msgs, list) and msgs:
+            msgs_copy = [dict(message) for message in msgs]
+            if msgs_copy[-1].get("role") == "assistant":
+                if str(msgs_copy[-1].get("content", "")) != output_text:
+                    raise ValueError("The final assistant message does not match output_text")
+            else:
+                msgs_copy.append({"role": "assistant", "content": output_text})
             example["messages"] = msgs_copy
         else:
-            example["messages"] = [{"role": "user", "content": str(msgs)}, {"role": "assistant", "content": str(example["output_text"])}]
+            example["messages"] = [
+                {"role": "user", "content": str(example.get("prompt", ""))},
+                {"role": "assistant", "content": output_text},
+            ]
         return example
         
     dataset = dataset.map(format_messages, desc="Formatting conversation messages")
@@ -55,8 +65,8 @@ def prepare_train_dataset(dataset_path, model_name_or_path):
 def main():
     args = parse_args()
     
-    train_dataset = prepare_train_dataset(args.train_data_path, args.model_name_or_path)
-    eval_dataset = prepare_train_dataset(args.dev_data_path, args.model_name_or_path)
+    train_dataset = prepare_train_dataset(args.train_data_path)
+    eval_dataset = prepare_train_dataset(args.dev_data_path)
     
     print(f"\n[INFO] Số lượng tập train: {len(train_dataset)}")
     print(f"[INFO] Số lượng tập dev (validation): {len(eval_dataset)}")
@@ -98,8 +108,13 @@ def main():
     )
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    configured_qwen2_base = configure_qwen2_base_tokenizer(
+        tokenizer, args.model_name_or_path
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    if configured_qwen2_base:
+        sync_model_special_tokens(model, tokenizer)
     print(f"\nKhởi tạo SFTTrainer với model: {args.model_name_or_path}")
     
     trainer = SFTTrainer(
@@ -114,6 +129,7 @@ def main():
     trainer.train()
     
     trainer.save_model(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
     import shutil, glob
     for ckpt in glob.glob(f"{args.output_dir}/checkpoint-*"):
         shutil.rmtree(ckpt, ignore_errors=True)

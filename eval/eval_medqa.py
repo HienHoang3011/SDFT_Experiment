@@ -34,7 +34,12 @@ def load_model_and_tokenizer(model_path):
             config = json.load(f)
         base_model_path = config.get("base_model_name_or_path")
         
-        tokenizer = AutoTokenizer.from_pretrained(base_model_path, padding_side='left')
+        tokenizer_source = (
+            model_path
+            if os.path.exists(os.path.join(model_path, "tokenizer_config.json"))
+            else base_model_path
+        )
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, padding_side='left')
         if tokenizer.pad_token is None or tokenizer.pad_token == tokenizer.eos_token:
             if "<|endoftext|>" in tokenizer.vocab:
                 tokenizer.pad_token = "<|endoftext|>"

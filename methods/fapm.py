@@ -30,7 +30,7 @@ def main():
         trust_remote_code=True
     ).eval()
     
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.sft_model, trust_remote_code=True)
     
     weights = model.state_dict()
     weights_sft = model_sft.state_dict()
@@ -74,6 +74,11 @@ def main():
         torch.cuda.empty_cache()
 
     model.load_state_dict(weights)
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.pad_token_id = tokenizer.pad_token_id
+    if model.generation_config is not None:
+        model.generation_config.eos_token_id = tokenizer.eos_token_id
+        model.generation_config.pad_token_id = tokenizer.pad_token_id
     
     print(f"[FAPM] Đang lưu mô hình mới tại: {args.output_dir}")
     os.makedirs(args.output_dir, exist_ok=True)
