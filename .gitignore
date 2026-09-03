@@ -7,8 +7,10 @@ wheels/
 *.egg-info
 outputs/
 reports/
+reports-qwen2/
 *.log
 ouputs/
+evals_and_steer_images/
 # Virtual environments
 .venv
 

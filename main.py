@@ -84,13 +84,13 @@ def main():
         print("\n⏭️  Bỏ qua Bước 1C: Apply FAPM")
 
     if not args.skip_train_steer:
-        train_steer_cmd = f"/root/.local/bin/uv run python methods/train_steer.py --model_name_or_path {args.base_model} --output_dir {args.steer_model}{peft_flag}"
+        train_steer_cmd = f"/root/.local/bin/uv run python methods/train_steer.py --model_name_or_path {args.base_model} --output_dir {args.steer_model}{peft_flag} --kl_probe_samples 250 --kl_probe_max_tokens_per_batch 128"
         run_command(train_steer_cmd, "BƯỚC 1D: HUẤN LUYỆN STEERED SFT")
     else:
         print("\n⏭️  Bỏ qua Bước 1D: Train Steered SFT")
 
     if not args.skip_train_steer_full:
-        train_steer_full_cmd = f"/root/.local/bin/uv run python methods/train_steer.py --model_name_or_path {args.base_model} --output_dir {args.steer_full_model} --disable_peft"
+        train_steer_full_cmd = f"/root/.local/bin/uv run python methods/train_steer.py --model_name_or_path {args.base_model} --output_dir {args.steer_full_model} --disable_peft --kl_probe_samples 250 --kl_probe_max_tokens_per_batch 128"
         run_command(train_steer_full_cmd, "BƯỚC 1E: HUẤN LUYỆN STEERED SFT FULL")
     else:
         print("\n⏭️  Bỏ qua Bước 1E: Train Steered SFT Full")
@@ -175,7 +175,7 @@ def main():
             steer_prior_task=f"{eval_dirs['steer_prior']}/previous_capabilities_summary.json",
             steer_full_new_task=f"{eval_dirs['steer_full_medqa']}/eval_results.json",
             steer_full_prior_task=f"{eval_dirs['steer_full_prior']}/previous_capabilities_summary.json",
-            output_dir="reports"
+            output_dir="reports-qwen2"
         )
     else:
         print("\n⏭️  Bỏ qua Bước 7: Sinh báo cáo")
