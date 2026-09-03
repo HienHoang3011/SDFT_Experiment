@@ -155,6 +155,54 @@ def prompt_hash(prompt):
     normalized = " ".join(prompt.lower().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
+def remove_duplicate_and_cross_split_prompts(datasets):
+    """
+    Keep evaluation data protected.
+
+    Priority:
+        test > dev > train
+
+    If the same normalized prompt occurs in multiple splits,
+    keep it in the higher-priority split and remove it from the others.
+    Also remove duplicate prompts inside each split.
+    """
+    cleaned = {}
+    seen = set()
+
+    for split_name in ("test", "dev", "train"):
+        dataset = datasets[split_name]
+
+        keep_indices = []
+        local_seen = set()
+
+        for idx, row in enumerate(dataset):
+            h = prompt_hash(row["prompt"])
+
+            # Duplicate inside the same split
+            if h in local_seen:
+                continue
+
+            local_seen.add(h)
+
+            # Prompt already exists in a higher-priority split
+            if h in seen:
+                continue
+
+            seen.add(h)
+            keep_indices.append(idx)
+
+        cleaned[split_name] = dataset.select(keep_indices)
+
+        print(
+            f"[dedup] {split_name}: "
+            f"{len(dataset)} -> {len(cleaned[split_name])}"
+        )
+
+    return {
+        "train": cleaned["train"],
+        "dev": cleaned["dev"],
+        "test": cleaned["test"],
+    } 
 
 def validate(task, datasets):
     errors = []
@@ -269,13 +317,16 @@ def main():
         else:
             print(f"\n[prepare] Loading and formatting {task}...")
             datasets = load_and_format(
-                task,
-                args.dev_ratio,
-                args.seed,
-                args.max_train_samples,
-                args.max_eval_samples,
-                args.squad_context_chars,
-            )
+            task,
+            args.dev_ratio,
+            args.seed,
+            args.max_train_samples,
+            args.max_eval_samples,
+            args.squad_context_chars,
+        )
+
+        datasets = remove_duplicate_and_cross_split_prompts(datasets)
+
         report = validate(task, datasets)
         write_quality_report(report, Path(args.report_root) / f"reports-{task}")
         if report["errors"]:
