@@ -5,6 +5,7 @@ import logging
 
 try:
     import lm_eval
+    from lm_eval.models.huggingface import HFLM
 except ImportError:
     print("Vui lòng cài đặt thư viện lm-evaluation-harness để chạy file này:")
     print("pip install lm-eval")
@@ -31,7 +32,6 @@ def main():
         "hellaswag",
         "mmlu",
         "truthfulqa",
-        "winogrande",
         "humaneval",
         "ifeval" 
     ]
@@ -39,30 +39,64 @@ def main():
     print(f"Bắt đầu đánh giá mô hình {args.model_path} trên các task:")
     print(", ".join(tasks))
     
-    # Cố định sử dụng backend Hugging Face (hf) thay vì vLLM
-    # để tương thích tốt nhất với cả base model và các PEFT/LoRA adapters (SFT, Steered)
-    backend_name = "hf"
-
-    # Thiết lập tham số model cho lm_eval
-    # Kiểm tra xem đây có phải là mô hình PEFT không
+    # Khởi tạo HFLM trực tiếp để có thể vô hiệu hóa max_new_tokens=2048
+    # được đóng gói sẵn trong generation_config của Qwen2 base. Nếu giữ nó,
+    # Transformers sẽ bỏ qua giới hạn max_length/max_gen_toks của từng task.
     is_peft = os.path.exists(os.path.join(args.model_path, "adapter_config.json"))
     if is_peft:
         with open(os.path.join(args.model_path, "adapter_config.json"), "r") as f:
             config = json.load(f)
         base_model = config.get("base_model_name_or_path")
-        model_args = f"pretrained={base_model},peft={args.model_path},dtype=auto,parallelize=True"
+        if not base_model:
+            raise ValueError("adapter_config.json is missing base_model_name_or_path")
+        tokenizer_source = (
+            args.model_path
+            if os.path.exists(os.path.join(args.model_path, "tokenizer_config.json"))
+            else base_model
+        )
+        eval_model = HFLM(
+            pretrained=base_model,
+            peft=args.model_path,
+            tokenizer=tokenizer_source,
+            dtype="auto",
+            parallelize=True,
+            batch_size=args.batch_size,
+        )
     else:
-        model_args = f"pretrained={args.model_path},dtype=auto,parallelize=True"
+        eval_model = HFLM(
+            pretrained=args.model_path,
+            tokenizer=args.model_path,
+            dtype="auto",
+            parallelize=True,
+            batch_size=args.batch_size,
+        )
+
+    generation_config = eval_model.model.generation_config
+    inherited_max_new_tokens = generation_config.max_new_tokens
+    generation_config.max_new_tokens = None
+    generation_config.eos_token_id = eval_model.tokenizer.eos_token_id
+    generation_config.pad_token_id = eval_model.tokenizer.pad_token_id
+    eval_model.model.config.eos_token_id = eval_model.tokenizer.eos_token_id
+    eval_model.model.config.pad_token_id = eval_model.tokenizer.pad_token_id
+    print(
+        "[Generation config] Disabled inherited max_new_tokens="
+        f"{inherited_max_new_tokens}; lm-eval task limits will be used."
+    )
+    print(
+        "[Generation config] "
+        f"EOS={eval_model.tokenizer.eos_token} "
+        f"({eval_model.tokenizer.eos_token_id}), "
+        f"PAD={eval_model.tokenizer.pad_token} "
+        f"({eval_model.tokenizer.pad_token_id})."
+    )
 
     # Để đánh giá HumanEval bằng thư viện, đôi khi cần thiết lập biến môi trường
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
     # Chạy đánh giá
     results = lm_eval.simple_evaluate(
-        model=backend_name,
-        model_args=model_args,
+        model=eval_model,
         tasks=tasks,
-        batch_size=args.batch_size,
         log_samples=False,
         confirm_run_unsafe_code=True,
     )

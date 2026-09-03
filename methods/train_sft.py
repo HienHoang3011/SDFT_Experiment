@@ -22,9 +22,11 @@ def parse_args():
                         help="Directory to save the trained model")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1,
                         help="Batch size per GPU for training")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=32,
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=1,
+                        help="Batch size per GPU for evaluation")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=64,
                         help="Number of update steps to accumulate before performing a backward/update pass")
-    parser.add_argument("--learning_rate", type=float, default=2e-5,
+    parser.add_argument("--learning_rate", type=float, default=1e-5,
                         help="Learning rate")
     parser.add_argument("--num_train_epochs", type=int, default=3,
                         help="Total number of training epochs")
@@ -77,14 +79,18 @@ def main():
     training_args = SFTConfig(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
+        per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         num_train_epochs=args.num_train_epochs,
         max_length=args.max_seq_length,
         assistant_only_loss=True,
+        average_tokens_across_devices=True,
         
-        warmup_ratio=0.1,
+        warmup_ratio=0.03,
         lr_scheduler_type="cosine",
+        weight_decay=0.1,
+        optim="adamw_torch",
         max_grad_norm=1.0,
         logging_steps=1,
         eval_strategy="steps",
@@ -115,6 +121,7 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     if configured_qwen2_base:
         sync_model_special_tokens(model, tokenizer)
+    model.config.use_cache = False
     print(f"\nKhởi tạo SFTTrainer với model: {args.model_name_or_path}")
     
     trainer = SFTTrainer(

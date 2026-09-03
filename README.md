@@ -51,3 +51,52 @@ uv run python main.py --base_model "Qwen/Qwen2-7B"
 After the pipeline finishes, the results will be saved in the `reports/` directory:
 - A printed markdown table comparing "New Task Accuracy" vs "Prior Tasks Performance".
 - `reports/sdft_performance_plot.png`: A scatter plot visualization showing the performance trade-off between the Base Model and SDFT.
+
+# Qwen2 catastrophic-forgetting screening
+
+Run the complete data preparation, validation, Full SFT, LoRA, downstream
+evaluation, prior-capability evaluation, and reporting pipeline with:
+
+```bash
+bash run_cf_screening.sh
+```
+
+The default tasks are WinoGrande, SQuAD, and RTE. Reports are written to
+`reports-winogrande`, `reports-squad`, and `reports-rte`. Each report contains
+the data-quality audit, raw downstream predictions, retained-capability
+results, a Markdown/JSON table, `results_table.png`,
+`performance_plot_5_models.png`, and `prior_tasks_breakdown.png`, matching the
+report family produced by the original pipeline.
+
+Full-SFT and LoRA model directories are temporary. Each model is trained,
+evaluated on both downstream and prior tasks, and then deleted; reports and raw
+predictions remain. Set `KEEP_MODELS=1` only when checkpoints are needed for
+debugging.
+
+Training calls the existing `methods/train_sft.py` and
+`methods/train_sft_lora.py` files. Defaults shared by all training methods are
+the disclosed FAPM settings: learning rate `1e-5`, effective batch size `64`
+for the default one-process/batch-one run, three epochs, AdamW, cosine
+scheduling, warmup ratio `0.03`, weight decay `0.1`, and sequence length
+`2048`. LoRA-only fields not disclosed by FAPM remain the repository defaults:
+rank `128`, alpha `256`, and dropout `0.05`.
+
+Prior evaluation is enabled and uses HellaSwag, MMLU, TruthfulQA, HumanEval,
+and IFEval. WinoGrande is deliberately excluded because it is a downstream
+training task in this screening suite.
+
+Environment variables can override the run without editing the script:
+
+```bash
+TASKS="winogrande rte" EPOCHS=1 bash run_cf_screening.sh
+```
+
+For a small smoke run, use separate paths so the reduced datasets are not
+reused by a later full run:
+
+```bash
+DATA_ROOT=data/cf_benchmarks-smoke \
+OUTPUT_ROOT=outputs/cf-screening-smoke \
+MAX_TRAIN_SAMPLES=64 MAX_EVAL_SAMPLES=32 DOWNSTREAM_EVAL_LIMIT=32 \
+bash run_cf_screening.sh
+```

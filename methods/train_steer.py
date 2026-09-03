@@ -637,8 +637,8 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="outputs/steer-qwen2-7b")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=32)
-    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=64)
+    parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--num_train_epochs", type=int, default=3)
     parser.add_argument("--max_seq_length", type=int, default=2048)
     parser.add_argument("--x_factor", type=float, default=1.0)
@@ -714,8 +714,9 @@ def main():
         loss_type="nll",
         model_init_kwargs={"dtype": "bfloat16"},
         average_tokens_across_devices=True,
-        warmup_ratio=0.1,
+        warmup_ratio=0.03,
         lr_scheduler_type="cosine",
+        weight_decay=0.1,
         max_grad_norm=1.0,
         logging_steps=1,
         eval_strategy="steps",
@@ -727,7 +728,7 @@ def main():
         bf16=True,
         fp16=False,
         gradient_checkpointing=True,
-        optim="paged_adamw_8bit"
+        optim="adamw_torch"
     )
     
     peft_config = None

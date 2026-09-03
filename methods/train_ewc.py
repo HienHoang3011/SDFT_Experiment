@@ -4,6 +4,7 @@ import torch
 from datasets import load_from_disk
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTTrainer, SFTConfig
+from qwen2_base import configure_qwen2_base_tokenizer, sync_model_special_tokens
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Elastic Weight Consolidation (EWC) Full Fine-Tuning")
@@ -15,9 +16,11 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="outputs/ewc-qwen2-7b")
     parser.add_argument("--ewc_lambda", type=float, default=100.0, help="Hệ số phạt EWC")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=32)
-    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=64)
+    parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--num_train_epochs", type=int, default=3)
+    parser.add_argument("--max_seq_length", type=int, default=2048)
     return parser.parse_args()
 
 def prepare_dataset(data_path):
@@ -68,6 +71,9 @@ def main():
     args = parse_args()
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    configured_qwen2_base = configure_qwen2_base_tokenizer(
+        tokenizer, args.model_name_or_path
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
@@ -78,6 +84,9 @@ def main():
         device_map="auto",
         trust_remote_code=True
     )
+    if configured_qwen2_base:
+        sync_model_special_tokens(model, tokenizer)
+    model.config.use_cache = False
     
     train_dataset = prepare_dataset(args.train_data_path)
     eval_dataset = prepare_dataset(args.dev_data_path)
@@ -85,16 +94,24 @@ def main():
     training_args = SFTConfig(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
+        per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         logging_steps=10,
         num_train_epochs=args.num_train_epochs,
         save_strategy="epoch",
         save_total_limit=1,
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         bf16=True,
-        max_seq_length=2048,
-        dataset_text_field="messages"
+        max_length=args.max_seq_length,
+        assistant_only_loss=True,
+        average_tokens_across_devices=True,
+        warmup_ratio=0.03,
+        lr_scheduler_type="cosine",
+        weight_decay=0.1,
+        optim="adamw_torch",
+        max_grad_norm=1.0,
+        gradient_checkpointing=True,
     )
     
     trainer = EWCTrainer(
@@ -103,7 +120,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
     
     print("\n[INFO] BẮT ĐẦU HUẤN LUYỆN EWC FULL FINE-TUNING...")
