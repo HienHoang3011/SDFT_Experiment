@@ -1,0 +1,5 @@
+dataset_name: conceptual_physics
+tag: mmlu_gen_tasks
+include: _default_template_yaml
+task: mmlu_gen_conceptual_physics
+task_alias: conceptual_physics

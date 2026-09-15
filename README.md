@@ -52,7 +52,7 @@ After the pipeline finishes, the results will be saved in the `reports/` directo
 - A printed markdown table comparing "New Task Accuracy" vs "Prior Tasks Performance".
 - `reports/sdft_performance_plot.png`: A scatter plot visualization showing the performance trade-off between the Base Model and SDFT.
 
-# Qwen2 catastrophic-forgetting screening
+# Qwen2 RTE catastrophic-forgetting experiment
 
 Run the complete data preparation, validation, Full SFT, LoRA, downstream
 evaluation, prior-capability evaluation, and reporting pipeline with:
@@ -61,11 +61,11 @@ evaluation, prior-capability evaluation, and reporting pipeline with:
 bash run_cf_screening.sh
 ```
 
-The default tasks are WinoGrande, SQuAD, and RTE. Reports are written to
-`reports-winogrande`, `reports-squad`, and `reports-rte`. Each report contains
-the data-quality audit, raw downstream predictions, retained-capability
+The default training task is RTE and the report is written to `reports-rte`.
+Each report contains the data-quality audit, raw downstream predictions,
+retained-capability
 results, a Markdown/JSON table, `results_table.png`,
-`performance_plot_5_models.png`, and `prior_tasks_breakdown.png`, matching the
+`performance_tradeoff.png`, and `prior_tasks_breakdown.png`, matching the
 report family produced by the original pipeline.
 
 Full-SFT and LoRA model directories are temporary. Each model is trained,
@@ -81,14 +81,18 @@ scheduling, warmup ratio `0.03`, weight decay `0.1`, and sequence length
 `2048`. LoRA-only fields not disclosed by FAPM remain the repository defaults:
 rank `128`, alpha `256`, and dropout `0.05`.
 
-Prior evaluation is enabled and uses HellaSwag, MMLU, TruthfulQA, HumanEval,
-and IFEval. WinoGrande is deliberately excluded because it is a downstream
-training task in this screening suite.
+Prior evaluation uses two scoring paths for the exact same full MMLU, PIQA,
+and BoolQ evaluation documents: canonical lm-eval multiple-choice
+log-likelihood and deterministic generated-answer parsing. IFEval uses its
+canonical generation grader; MATH-500 and SimpleQA are generated and graded
+with the deterministic strict/flexible diagnostics recorded in the report.
+SimpleQA is explicitly labelled as non-canonical because the official metric
+uses an LLM judge.
 
 Environment variables can override the run without editing the script:
 
 ```bash
-TASKS="winogrande rte" EPOCHS=1 bash run_cf_screening.sh
+EPOCHS=1 PRIOR_BATCH_SIZE=8 bash run_cf_screening.sh
 ```
 
 For a small smoke run, use separate paths so the reduced datasets are not
@@ -100,3 +104,24 @@ OUTPUT_ROOT=outputs/cf-screening-smoke \
 MAX_TRAIN_SAMPLES=64 MAX_EVAL_SAMPLES=32 DOWNSTREAM_EVAL_LIMIT=32 \
 bash run_cf_screening.sh
 ```
+
+## SQuAD steer-full continuation and analysis bundle
+
+After the Base, Full SFT, and LoRA SQuAD evaluations are available under
+`outputs/`, run the full-weight steered continuation with:
+
+```bash
+tmux new-session -d -s squad_steer_full 'bash run_squad_steer_full.sh'
+```
+
+The continuation uses the same SQuAD configuration as `main.py`: two epochs,
+learning rate `1e-5`, effective batch size `64`, sequence length `2048`, and KL
+probe settings `250/128`. It writes its own log to
+`logs/squad_steer_full.log`, evaluates SQuAD and the complete prior-capability
+suite, regenerates the comparison report, and deletes the temporary model only
+after all evaluation and reporting steps succeed.
+
+`collect_squad_analysis.sh` copies all Base/Full-SFT/LoRA/Steer-Full evaluation
+artifacts, report images, steer training diagnostics, and logs into
+`evals_and_steer_images/squad_analysis`. Model weights and checkpoint files are
+never included.

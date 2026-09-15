@@ -1,0 +1,5 @@
+dataset_name: moral_disputes
+tag: mmlu_gen_tasks
+include: _default_template_yaml
+task: mmlu_gen_moral_disputes
+task_alias: moral_disputes

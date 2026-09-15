@@ -1,0 +1,5 @@
+dataset_name: clinical_knowledge
+tag: mmlu_gen_tasks
+include: _default_template_yaml
+task: mmlu_gen_clinical_knowledge
+task_alias: clinical_knowledge

@@ -1,0 +1,5 @@
+dataset_name: medical_genetics
+tag: mmlu_gen_tasks
+include: _default_template_yaml
+task: mmlu_gen_medical_genetics
+task_alias: medical_genetics

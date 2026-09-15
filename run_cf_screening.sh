@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-command Qwen2-7B screening on the three strongest FAPM task candidates.
+# One-command Qwen2-7B catastrophic-forgetting experiment using RTE training.
 # Training uses the repository's existing train_sft.py and train_sft_lora.py.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +9,7 @@ cd "$ROOT_DIR"
 
 UV_BIN="${UV_BIN:-uv}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2-7B}"
-TASKS="${TASKS:-winogrande squad rte}"
+TASKS="${TASKS:-rte}"
 DATA_ROOT="${DATA_ROOT:-data/cf_benchmarks}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/cf-screening}"
 SHARED_REPORT_DIR="${SHARED_REPORT_DIR:-reports-cf-shared}"
@@ -25,7 +25,7 @@ MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-2048}"
 MAX_TRAIN_SAMPLES="${MAX_TRAIN_SAMPLES:-0}"
 MAX_EVAL_SAMPLES="${MAX_EVAL_SAMPLES:-0}"
 DOWNSTREAM_EVAL_LIMIT="${DOWNSTREAM_EVAL_LIMIT:-0}"
-PRIOR_BATCH_SIZE="${PRIOR_BATCH_SIZE:-auto}"
+PRIOR_BATCH_SIZE="${PRIOR_BATCH_SIZE:-4}"
 
 run_python() {
   "$UV_BIN" run python "$@"
@@ -69,11 +69,10 @@ run_python prepare_cf_benchmarks.py \
   --max_train_samples "$MAX_TRAIN_SAMPLES" \
   --max_eval_samples "$MAX_EVAL_SAMPLES"
 
-# Prior capabilities are evaluated once for the common base model. The existing
-# evaluator now intentionally excludes WinoGrande from every prior suite.
-run_python eval/eval_previous_task.py \
+# Prior capabilities are evaluated once for the common base model. The suite has
+# two views of MMLU/PIQA/BoolQ plus generation grading for IFEval/MATH-500/SimpleQA.
+run_python eval/eval_prior_capabilities.py \
   --model_path "$BASE_MODEL" \
-  --backend hf \
   --batch_size "$PRIOR_BATCH_SIZE" \
   --output_dir "$SHARED_REPORT_DIR/base"
 
@@ -88,10 +87,7 @@ for task in "${TASK_ARRAY[@]}"; do
   dev_data="$DATA_ROOT/$task/dev"
 
   mkdir -p "$report_dir/base"
-  cp "$SHARED_REPORT_DIR/base/previous_capabilities_summary.json" \
-    "$report_dir/base/previous_capabilities_summary.json"
-  cp "$SHARED_REPORT_DIR/base/previous_capabilities_detailed.json" \
-    "$report_dir/base/previous_capabilities_detailed.json"
+  cp -a "$SHARED_REPORT_DIR/base/." "$report_dir/base/"
 
   run_python eval/eval_cf_task.py \
     --task "$task" \
@@ -117,9 +113,8 @@ for task in "${TASK_ARRAY[@]}"; do
     --output_dir "$report_dir/full" \
     --limit "$DOWNSTREAM_EVAL_LIMIT"
 
-  run_python eval/eval_previous_task.py \
+  run_python eval/eval_prior_capabilities.py \
     --model_path "$full_model_dir" \
-    --backend hf \
     --batch_size "$PRIOR_BATCH_SIZE" \
     --output_dir "$report_dir/full"
 
@@ -142,9 +137,8 @@ for task in "${TASK_ARRAY[@]}"; do
     --output_dir "$report_dir/lora" \
     --limit "$DOWNSTREAM_EVAL_LIMIT"
 
-  run_python eval/eval_previous_task.py \
+  run_python eval/eval_prior_capabilities.py \
     --model_path "$lora_model_dir" \
-    --backend hf \
     --batch_size "$PRIOR_BATCH_SIZE" \
     --output_dir "$report_dir/lora"
 
@@ -156,4 +150,4 @@ for task in "${TASK_ARRAY[@]}"; do
 done
 
 echo
-echo "Completed. Reports: reports-winogrande, reports-squad, reports-rte"
+echo "Completed. Reports were written for: $TASKS"

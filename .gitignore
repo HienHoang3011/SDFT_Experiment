@@ -11,9 +11,12 @@ reports-qwen2/
 *.log
 ouputs/
 evals_and_steer_images/
+/outputs-qwen2/*-qwen2-7b/
+/data/cf_benchmarks/
 # Virtual environments
 .venv
-
+*.sh
+outputs-qwen2
 # Hugging Face & Dataset Cache
 cache-*.arrow
 .cache/

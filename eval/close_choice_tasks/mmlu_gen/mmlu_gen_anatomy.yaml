@@ -1,0 +1,5 @@
+dataset_name: anatomy
+tag: mmlu_gen_tasks
+include: _default_template_yaml
+task: mmlu_gen_anatomy
+task_alias: anatomy

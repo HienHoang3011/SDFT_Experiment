@@ -1,0 +1,5 @@
+dataset_name: human_aging
+tag: mmlu_gen_tasks
+include: _default_template_yaml
+task: mmlu_gen_human_aging
+task_alias: human_aging

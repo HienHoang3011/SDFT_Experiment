@@ -1,0 +1,10 @@
+group: mmlu_gen
+task:
+  - mmlu_gen_tasks
+aggregate_metric_list:
+  - metric: generation_accuracy
+    weight_by_size: true
+  - metric: parse_valid_rate
+    weight_by_size: true
+metadata:
+  version: 1

@@ -1,0 +1,23 @@
+dataset_path: cais/mmlu
+test_split: test
+fewshot_split: dev
+fewshot_config:
+  sampler: first_n
+output_type: generate_until
+doc_to_text: !function close_choice_tasks.utils.mmlu_doc_to_text
+doc_to_target: !function close_choice_tasks.utils.mmlu_doc_to_target
+generation_kwargs:
+  until: []
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 32
+process_results: !function close_choice_tasks.utils.process_mmlu_results
+metric_list:
+  - metric: generation_accuracy
+    aggregation: mean
+    higher_is_better: true
+  - metric: parse_valid_rate
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

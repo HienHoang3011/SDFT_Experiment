@@ -1,0 +1,43 @@
+{
+  "task": "squad",
+  "status": "ok",
+  "splits": {
+    "train": {
+      "num_samples": 83027,
+      "empty_prompts": 0,
+      "empty_answers": 0,
+      "malformed_messages": 0,
+      "invalid_answers_or_choices": 0,
+      "duplicate_prompts_within_split": 0,
+      "answer_not_in_context": 0,
+      "label_counts": {}
+    },
+    "dev": {
+      "num_samples": 4379,
+      "empty_prompts": 0,
+      "empty_answers": 0,
+      "malformed_messages": 0,
+      "invalid_answers_or_choices": 0,
+      "duplicate_prompts_within_split": 0,
+      "answer_not_in_context": 0,
+      "label_counts": {}
+    },
+    "test": {
+      "num_samples": 10531,
+      "empty_prompts": 0,
+      "empty_answers": 0,
+      "malformed_messages": 0,
+      "invalid_answers_or_choices": 0,
+      "duplicate_prompts_within_split": 0,
+      "answer_not_in_context": 0,
+      "label_counts": {}
+    }
+  },
+  "cross_split_prompt_overlap": {
+    "train_dev": 0,
+    "train_test": 0,
+    "dev_test": 0
+  },
+  "warnings": [],
+  "errors": []
+}

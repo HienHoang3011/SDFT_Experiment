@@ -1,0 +1,5 @@
+dataset_name: nutrition
+tag: mmlu_gen_tasks
+include: _default_template_yaml
+task: mmlu_gen_nutrition
+task_alias: nutrition

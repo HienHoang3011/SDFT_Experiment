@@ -1,0 +1,25 @@
+task: boolq_gen
+dataset_path: aps/super_glue
+dataset_name: boolq
+output_type: generate_until
+training_split: train
+validation_split: validation
+doc_to_text: !function utils.boolq_doc_to_text
+doc_to_target: !function utils.boolq_doc_to_target
+should_decontaminate: true
+doc_to_decontamination_query: passage
+generation_kwargs:
+  until: []
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 32
+process_results: !function utils.process_boolq_results
+metric_list:
+  - metric: generation_accuracy
+    aggregation: mean
+    higher_is_better: true
+  - metric: parse_valid_rate
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0
