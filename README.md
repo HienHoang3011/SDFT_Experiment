@@ -1,127 +1,67 @@
-# Self-Distilled Fine-Tuning (SDFT) Pipeline
+# SAMSum continual-learning method comparison
 
-This project implements the Self-Distilled Fine-Tuning (SDFT) approach for continual learning without catastrophic forgetting.
+The retained historical run compares Qwen/Qwen2-7B Base, Full SFT and LoRA
+after two SAMSum epochs. The active code now prepares a fresh, matched run of
+Full SFT, LoRA, empirical-Fisher EWC, Steer-LoRA, Steer-Full, and FAPM.
+Steer is this project's own logit-margin/KL method; it is not the published
+on-policy SDFT algorithm.
 
-## Dataset Information
+## Data and fairness contract
 
-- **Dataset:** GBaker/MedQA-USMLE-4-options
-- **Train Data:** 10,178 examples (Used for training. During training, it is automatically split into ~9,160 train / ~1,018 validation examples).
-- **Eval Data (Test):** 1,273 examples (Used strictly as a held-out test set to evaluate New Task Accuracy).
+All trainable methods start from the same Qwen2-7B base, use the same prepared
+SAMSum train/dev splits, 2 epochs, learning rate 1e-5, effective batch size 64,
+sequence length 2048, AdamW/cosine schedule, warmup 0.03, weight decay 0.1,
+and seed 42. LoRA and Steer-LoRA use the same rank 256, alpha 512, dropout
+0.3 and target modules. Steer-Full and EWC train full weights. FAPM is a
+post-processing method derived from this run's Full SFT checkpoint, not an
+independent training budget.
 
-## Installation
+EWC estimates its diagonal empirical Fisher before fine-tuning from up to 256
+examples in the same SAMSum train split, masking user and system tokens so the
+Fisher objective matches the assistant-only SFT loss. Its anchor is the initial
+base checkpoint. This avoids requiring a separately prepared Fisher dataset
+and keeps the data split shared. Since this experiment has no explicit earlier
+task, this is Fisher-weighted regularization for SAMSum adaptation, not the
+usual continual-learning setup where Fisher comes from an old task and protects
+that task against forgetting. The sample cap and lambda are recorded in the
+run manifest.
 
-Ensure you have installed all required dependencies in your environment using `uv` (Note: `vllm` is excluded for Windows compatibility):
-
-```bash
-uv add datasets trl peft matplotlib lm-eval transformers torch
-```
-
-> [!NOTE]
-> **Troubleshooting GPU/CUDA Issues:**
-> If you encounter errors like `ValueError: Your setup doesn't support bf16/gpu` or warnings about the NVIDIA driver being too old (e.g., driver version 525.xx / CUDA 12.0) during training, PyTorch may not be recognizing your GPU due to a CUDA version mismatch. 
-> 
-> You can fix this by reinstalling PyTorch with a compatible CUDA version (e.g., CUDA 11.8) using:
-> ```bash
-> uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-> ```
-
-## Pipeline Execution
-
-To run the entire end-to-end pipeline, which includes:
-1. Training models using different approaches: Full SFT, SFT LoRA, FAPM, Steered SFT, and Steered SFT Full.
-2. Evaluating the MedQA Task (New Task) and Prior Capabilities (Old Tasks) for the Base Model.
-3. Evaluating the MedQA Task and Prior Capabilities for all the trained models (SFT, SFT LoRA, FAPM, Steered SFT, Steered SFT Full).
-4. Generating a comparative report and visualization plot across all methods.
-
-Run the following command:
+## Future matched run — not started yet
 
 ```bash
-uv run python main.py
+RUN_NAME=fair-methods-2epoch bash run_samsum_stable.sh
 ```
 
-### Optional Arguments
-You can specify a different base model or output directory when running the pipeline:
+The script refuses to overwrite populated model/report directories. It trains
+the six derived methods, evaluates SAMSum ROUGE-L with one evaluator, then
+runs the same five lm-eval tasks/metrics for Base and every method.
+Outputs go to `artifacts/samsum/$RUN_NAME/`. You may set `PYTHON_BIN`,
+`EWC_LAMBDA`, `FISHER_MAX_SAMPLES`, `STEER_X_FACTOR` and `FAPM_K_RATIO`
+explicitly; these method-specific choices should be selected using
+validation data, never benchmark test scores.
+
+## Re-evaluate existing 2-epoch checkpoints
+
+The one active capability runner is `benchmarks/stable_five/run.py`. By
+default it compares the retained Base, Full SFT and LoRA checkpoints on full
+GSM8K zero-shot, HumanEval Instruct, IFEval, BoolQ and BBH CoT zero-shot
+splits, using lm-eval 0.4.12. It persists each model/task result and resumes
+only when saved settings and model paths match.
 
 ```bash
-uv run python main.py --base_model "Qwen/Qwen2-7B"
+.venv/bin/python -u benchmarks/stable_five/run.py
 ```
 
-## Generated Reports
+Use `--model-path name=/path/to/checkpoint` and `--output-dir` to evaluate
+additional methods with exactly the same tasks and scorer. The report shows
+all selected methods and percentage-point gaps to Base.
 
-After the pipeline finishes, the results will be saved in the `reports/` directory:
-- A printed markdown table comparing "New Task Accuracy" vs "Prior Tasks Performance".
-- `reports/sdft_performance_plot.png`: A scatter plot visualization showing the performance trade-off between the Base Model and SDFT.
+## Source and historical artifacts
 
-# Qwen2 RTE catastrophic-forgetting experiment
-
-Run the complete data preparation, validation, Full SFT, LoRA, downstream
-evaluation, prior-capability evaluation, and reporting pipeline with:
-
-```bash
-bash run_cf_screening.sh
-```
-
-The default training task is RTE and the report is written to `reports-rte`.
-Each report contains the data-quality audit, raw downstream predictions,
-retained-capability
-results, a Markdown/JSON table, `results_table.png`,
-`performance_tradeoff.png`, and `prior_tasks_breakdown.png`, matching the
-report family produced by the original pipeline.
-
-Full-SFT and LoRA model directories are temporary. Each model is trained,
-evaluated on both downstream and prior tasks, and then deleted; reports and raw
-predictions remain. Set `KEEP_MODELS=1` only when checkpoints are needed for
-debugging.
-
-Training calls the existing `methods/train_sft.py` and
-`methods/train_sft_lora.py` files. Defaults shared by all training methods are
-the disclosed FAPM settings: learning rate `1e-5`, effective batch size `64`
-for the default one-process/batch-one run, three epochs, AdamW, cosine
-scheduling, warmup ratio `0.03`, weight decay `0.1`, and sequence length
-`2048`. LoRA-only fields not disclosed by FAPM remain the repository defaults:
-rank `128`, alpha `256`, and dropout `0.05`.
-
-Prior evaluation uses two scoring paths for the exact same full MMLU, PIQA,
-and BoolQ evaluation documents: canonical lm-eval multiple-choice
-log-likelihood and deterministic generated-answer parsing. IFEval uses its
-canonical generation grader; MATH-500 and SimpleQA are generated and graded
-with the deterministic strict/flexible diagnostics recorded in the report.
-SimpleQA is explicitly labelled as non-canonical because the official metric
-uses an LLM judge.
-
-Environment variables can override the run without editing the script:
-
-```bash
-EPOCHS=1 PRIOR_BATCH_SIZE=8 bash run_cf_screening.sh
-```
-
-For a small smoke run, use separate paths so the reduced datasets are not
-reused by a later full run:
-
-```bash
-DATA_ROOT=data/cf_benchmarks-smoke \
-OUTPUT_ROOT=outputs/cf-screening-smoke \
-MAX_TRAIN_SAMPLES=64 MAX_EVAL_SAMPLES=32 DOWNSTREAM_EVAL_LIMIT=32 \
-bash run_cf_screening.sh
-```
-
-## SQuAD steer-full continuation and analysis bundle
-
-After the Base, Full SFT, and LoRA SQuAD evaluations are available under
-`outputs/`, run the full-weight steered continuation with:
-
-```bash
-tmux new-session -d -s squad_steer_full 'bash run_squad_steer_full.sh'
-```
-
-The continuation uses the same SQuAD configuration as `main.py`: two epochs,
-learning rate `1e-5`, effective batch size `64`, sequence length `2048`, and KL
-probe settings `250/128`. It writes its own log to
-`logs/squad_steer_full.log`, evaluates SQuAD and the complete prior-capability
-suite, regenerates the comparison report, and deletes the temporary model only
-after all evaluation and reporting steps succeed.
-
-`collect_squad_analysis.sh` copies all Base/Full-SFT/LoRA/Steer-Full evaluation
-artifacts, report images, steer training diagnostics, and logs into
-`evals_and_steer_images/squad_analysis`. Model weights and checkpoint files are
-never included.
+`eval/` contains only the active SAMSum evaluator and manifest writer.
+`legacy_eval/` preserves the previous broad-suite evaluator, custom tasks and
+report generator, including its pre-existing local edits; it is not called by
+the new matched run. Historical reports and logs under
+`artifacts/samsum/stable-2epoch/` and `stable-4epoch/` remain untouched.
+See [ARTIFACTS.md](ARTIFACTS.md) for the layout. No training or benchmark was
+launched during this code change.

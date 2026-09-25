@@ -1,0 +1,30 @@
+{
+  "dataset": "fastlayne/samsum",
+  "benchmark": "SAMSum (EMNLP 2019)",
+  "splits": {
+    "train": 14639,
+    "dev": 814,
+    "test": 819
+  },
+  "dropped_empty_examples": {
+    "train": 1,
+    "dev": 0,
+    "test": 0
+  },
+  "dropped_duplicate_dialogues": {
+    "test": 0,
+    "dev": 4,
+    "train": 92
+  },
+  "id_hashes": {
+    "train": "ab0889113e8470d310565a014171e1847fb44d818fbfb126103648b5d8c2da96",
+    "dev": "48ce32f7556100978c1c8f599a1a4bc928d8b67b064c416072b30baadf319fb4",
+    "test": "7df42deffef55be1544d8210d98d4cf48b8b11382012245fa3e441a5ee094d6d"
+  },
+  "dialogue_hashes": {
+    "train": "4c2bc3815f67c19a6d414921064a69babe29fcc796934192c061ff796e0587ae",
+    "dev": "f35154c9213602d11fbdf4a3048453592eef88484dc22b98af87dab944249e29",
+    "test": "0e75e43e8410fbcccc5f79a078eab30f037a69396f45a03459b8ccf30549afbb"
+  },
+  "prompt_template": "summary inside <answer> tags"
+}

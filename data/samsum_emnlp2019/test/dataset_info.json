@@ -1,0 +1,87 @@
+{
+  "builder_name": "json",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "samsum",
+  "dataset_size": 10530016,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/fastlayne/samsum@362b8f95ef05cbd43e6a2574bd8b864f6bf03862/train.json": {
+      "num_bytes": 10484215,
+      "checksum": null
+    },
+    "hf://datasets/fastlayne/samsum@362b8f95ef05cbd43e6a2574bd8b864f6bf03862/val.json": {
+      "num_bytes": 571716,
+      "checksum": null
+    },
+    "hf://datasets/fastlayne/samsum@362b8f95ef05cbd43e6a2574bd8b864f6bf03862/test.json": {
+      "num_bytes": 590609,
+      "checksum": null
+    }
+  },
+  "download_size": 11646540,
+  "features": {
+    "id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "summary": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "dialogue": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "prompt": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "output_text": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "messages": {
+      "feature": {
+        "role": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "content": {
+          "dtype": "string",
+          "_type": "Value"
+        }
+      },
+      "_type": "List"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 22176556,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 9479117,
+      "num_examples": 14732,
+      "dataset_name": "samsum"
+    },
+    "validation": {
+      "name": "validation",
+      "num_bytes": 516419,
+      "num_examples": 818,
+      "dataset_name": "samsum"
+    },
+    "test": {
+      "name": "test",
+      "num_bytes": 534480,
+      "num_examples": 819,
+      "dataset_name": "samsum"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}

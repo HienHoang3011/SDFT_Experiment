@@ -631,16 +631,16 @@ def save_monitoring_plots(log_history, output_dir):
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Steered SFT Training")
     parser.add_argument("--model_name_or_path", type=str, default=QWEN2_BASE_MODEL_ID)
-    parser.add_argument("--train_data_path", type=str, default="data/medqa_data/train_data")
-    parser.add_argument("--eval_data_path", type=str, default="data/medqa_data/eval_data")
-    parser.add_argument("--dev_data_path", type=str, default="data/medqa_data/dev_data")
-    parser.add_argument("--output_dir", type=str, default="outputs/steer-qwen2-7b")
+    parser.add_argument("--train_data_path", type=str, default="data/samsum_emnlp2019/train")
+    parser.add_argument("--dev_data_path", type=str, default="data/samsum_emnlp2019/dev")
+    parser.add_argument("--output_dir", type=str, default="artifacts/manual/steer_lora")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=64)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
-    parser.add_argument("--num_train_epochs", type=int, default=3)
+    parser.add_argument("--num_train_epochs", type=int, default=2)
     parser.add_argument("--max_seq_length", type=int, default=2048)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--x_factor", type=float, default=1.0)
     parser.add_argument(
         "--kl_probe_samples",
@@ -728,15 +728,17 @@ def main():
         bf16=True,
         fp16=False,
         gradient_checkpointing=True,
-        optim="adamw_torch"
+        optim="adamw_torch",
+        seed=args.seed,
+        data_seed=args.seed,
     )
     
     peft_config = None
     if not args.disable_peft:
         peft_config = LoraConfig(
-            r=128,
-            lora_alpha=256,
-            lora_dropout=0.05,
+            r=256,
+            lora_alpha=512,
+            lora_dropout=0.3,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             task_type="CAUSAL_LM",
             bias="none",

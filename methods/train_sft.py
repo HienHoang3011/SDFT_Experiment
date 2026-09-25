@@ -1,6 +1,5 @@
 import argparse
-import os
-from datasets import Dataset, DatasetDict
+from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
 from qwen2_base import (
     QWEN2_BASE_MODEL_ID,
@@ -9,16 +8,14 @@ from qwen2_base import (
 )
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run SFT Training with LoRA")
+    parser = argparse.ArgumentParser(description="Run full SFT training on SAMSum")
     parser.add_argument("--model_name_or_path", type=str, default=QWEN2_BASE_MODEL_ID,
                         help="Path to the model or HF model name")
-    parser.add_argument("--train_data_path", type=str, default="data/medqa_data/train_data",
+    parser.add_argument("--train_data_path", type=str, default="data/samsum_emnlp2019/train",
                         help="Path to the train dataset (HF disk format)")
-    parser.add_argument("--eval_data_path", type=str, default="data/medqa_data/eval_data",
-                        help="Path to the eval dataset (HF disk format)")
-    parser.add_argument("--dev_data_path", type=str, default="data/medqa_data/dev_data",
+    parser.add_argument("--dev_data_path", type=str, default="data/samsum_emnlp2019/dev",
                         help="Path to the dev dataset for validation during training")
-    parser.add_argument("--output_dir", type=str, default="outputs/sft-qwen2-7b",
+    parser.add_argument("--output_dir", type=str, default="artifacts/manual/full_sft",
                         help="Directory to save the trained model")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1,
                         help="Batch size per GPU for training")
@@ -28,10 +25,12 @@ def parse_args():
                         help="Number of update steps to accumulate before performing a backward/update pass")
     parser.add_argument("--learning_rate", type=float, default=1e-5,
                         help="Learning rate")
-    parser.add_argument("--num_train_epochs", type=int, default=3,
+    parser.add_argument("--num_train_epochs", type=int, default=2,
                         help="Total number of training epochs")
     parser.add_argument("--max_seq_length", type=int, default=2048, # max_prompt_length (1024) + max_completion_length (1024)
                         help="Maximum sequence length")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for deterministic data ordering")
     return parser.parse_args()
 
 def prepare_train_dataset(dataset_path):
@@ -101,7 +100,9 @@ def main():
         report_to="none",
         bf16=True,
         fp16=False,
-        gradient_checkpointing=True
+        gradient_checkpointing=True,
+        seed=args.seed,
+        data_seed=args.seed,
     )
     
     import torch

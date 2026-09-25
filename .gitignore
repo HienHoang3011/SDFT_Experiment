@@ -8,6 +8,7 @@ wheels/
 outputs/
 reports/
 reports-qwen2/
+artifacts/
 *.log
 ouputs/
 evals_and_steer_images/
@@ -16,6 +17,7 @@ evals_and_steer_images/
 # Virtual environments
 .venv
 *.sh
+!run_samsum_stable.sh
 outputs-qwen2
 # Hugging Face & Dataset Cache
 cache-*.arrow

@@ -6,11 +6,9 @@ import argparse
 import importlib.metadata
 import json
 import math
-import re
+import os
 import sys
-import unicodedata
 from datetime import datetime, timezone
-from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -35,12 +33,15 @@ from qwen2_base import (  # noqa: E402
 )
 
 
-import os
 os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
-CANONICAL_TASKS = ("mmlu", "piqa", "boolq", "ifeval", "humaneval")
+CANONICAL_TASKS = ("mmlu", "piqa", "boolq", "ifeval")
 CLOSED_GENERATION_TASKS = ("mmlu_gen", "piqa_gen", "boolq_gen")
-EXTERNAL_GENERATION_TASKS = ("math500",)
+STANDARD_GENERATION_TASKS = ("minerva_math500", "humaneval_instruct")
+EXPECTED_STANDARD_SAMPLE_COUNTS = {
+    "minerva_math500": 500,
+    "humaneval_instruct": 164,
+}
 PRIMARY_METRICS = {
     "mmlu": ("groups", "mmlu", "acc,none"),
     "piqa": ("results", "piqa", "acc_norm,none"),
@@ -49,7 +50,12 @@ PRIMARY_METRICS = {
     "ifeval_prompt_loose": ("results", "ifeval", "prompt_level_loose_acc,none"),
     "ifeval_inst_strict": ("results", "ifeval", "inst_level_strict_acc,none"),
     "ifeval_inst_loose": ("results", "ifeval", "inst_level_loose_acc,none"),
-    "humaneval": ("results", "humaneval", "pass@1,create_test"),
+    "math500": ("results", "minerva_math500", "math_verify,none"),
+    "humaneval": (
+        "results",
+        "humaneval_instruct",
+        "pass@1,create_test",
+    ),
 }
 
 
@@ -60,6 +66,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument(
+        "--include_closed_generation",
+        action="store_true",
+        help=(
+            "Also generate and parse answers for MMLU/PIQA/BoolQ. Disabled by "
+            "default: headline closed-choice scores use log-likelihood only."
+        ),
+    )
     args = parser.parse_args()
     if args.batch_size <= 0:
         parser.error("--batch_size must be a positive integer")
@@ -271,294 +285,35 @@ def load_eval_model(model_path: str, batch_size: int):
     return model, info
 
 
-def _strip_balanced_box(text: str) -> str | None:
-    """Return the last balanced LaTeX boxed/fbox payload."""
-    candidates: list[str] = []
-    for match in re.finditer(r"\\(?:boxed|fbox)\s*\{", text):
-        start = match.end()
-        depth = 1
-        for index in range(start, len(text)):
-            if text[index] == "{":
-                depth += 1
-            elif text[index] == "}":
-                depth -= 1
-                if depth == 0:
-                    candidates.append(text[start:index].strip())
-                    break
-    return candidates[-1] if candidates else None
-
-
-def extract_freeform_answer(text: str) -> dict[str, str | bool | None]:
-    """Extract strict and flexible final answers from a generated response."""
-    output = str(text).strip()
-    strict_matches = re.findall(
-        r"(?:^|\n)\s*Final\s+answer\s*:\s*([^\n]+?)\s*$",
-        output,
-        flags=re.IGNORECASE,
-    )
-    strict_answer = strict_matches[-1].strip() if strict_matches else None
-    if strict_answer:
-        return {
-            "strict_answer": strict_answer,
-            "strict_parse_valid": True,
-            "flexible_answer": strict_answer,
-            "flexible_parse_valid": True,
-            "parse_method": "final_answer",
-        }
-
-    xml_matches = re.findall(
-        r"<answer>\s*(.*?)\s*</answer>", output, flags=re.IGNORECASE | re.DOTALL
-    )
-    if xml_matches and xml_matches[-1].strip():
-        return {
-            "strict_answer": None,
-            "strict_parse_valid": False,
-            "flexible_answer": xml_matches[-1].strip(),
-            "flexible_parse_valid": True,
-            "parse_method": "xml_answer",
-        }
-
-    boxed = _strip_balanced_box(output)
-    if boxed:
-        return {
-            "strict_answer": None,
-            "strict_parse_valid": False,
-            "flexible_answer": boxed,
-            "flexible_parse_valid": True,
-            "parse_method": "latex_boxed",
-        }
-
-    anchored_matches = re.findall(
-        r"(?:^|\n)\s*(?:(?:the\s+)?(?:final\s+|correct\s+)?answer\s+is\s*:?|"
-        r"answer\s*:)\s*([^\n]+?)\s*$",
-        output,
-        flags=re.IGNORECASE,
-    )
-    if anchored_matches and anchored_matches[-1].strip():
-        return {
-            "strict_answer": None,
-            "strict_parse_valid": False,
-            "flexible_answer": anchored_matches[-1].strip(),
-            "flexible_parse_valid": True,
-            "parse_method": "anchored_answer",
-        }
-
-    hash_matches = re.findall(r"####\s*([^\n]+)", output)
-    if hash_matches and hash_matches[-1].strip():
-        return {
-            "strict_answer": None,
-            "strict_parse_valid": False,
-            "flexible_answer": hash_matches[-1].strip(),
-            "flexible_parse_valid": True,
-            "parse_method": "hash_answer",
-        }
-
-    nonempty_lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if nonempty_lines:
-        last_line = re.sub(
-            r"^(?:therefore,?\s*)?(?:the\s+)?answer\s*(?:is|:)?\s*",
-            "",
-            nonempty_lines[-1],
-            flags=re.IGNORECASE,
-        ).strip()
-        if last_line:
-            return {
-                "strict_answer": None,
-                "strict_parse_valid": False,
-                "flexible_answer": last_line,
-                "flexible_parse_valid": True,
-                "parse_method": "last_nonempty_line",
-            }
-
-    return {
-        "strict_answer": None,
-        "strict_parse_valid": False,
-        "flexible_answer": None,
-        "flexible_parse_valid": False,
-        "parse_method": "invalid",
-    }
-
-
-def _normalize_math_answer(text: str) -> str:
-    value = unicodedata.normalize("NFKC", str(text)).strip()
-    boxed = _strip_balanced_box(value)
-    if boxed is not None:
-        value = boxed
-    value = value.replace("\\left", "").replace("\\right", "")
-    value = value.replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
-    value = value.replace("\\(", "").replace("\\)", "")
-    value = value.strip("$ ")
-    value = re.sub(r"\\text\{([^{}]*)\}", r"\1", value)
-    value = re.sub(r"\s+", "", value)
-    return value.rstrip(".,;").casefold()
-
-
-def _as_fraction(text: str) -> Fraction | None:
-    value = _normalize_math_answer(text).replace(",", "")
-    latex_fraction = re.fullmatch(
-        r"([+-]?)\\frac\{([+-]?\d+)\}\{([+-]?\d+)\}", value
-    )
-    try:
-        if latex_fraction:
-            sign, numerator, denominator = latex_fraction.groups()
-            result = Fraction(int(numerator), int(denominator))
-            return -result if sign == "-" else result
-        if re.fullmatch(r"[+-]?\d+/[+-]?\d+", value):
-            numerator, denominator = value.split("/", 1)
-            return Fraction(int(numerator), int(denominator))
-        if re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:%|\\%)?", value):
-            percent = value.endswith("%") or value.endswith("\\%")
-            numeric = value.removesuffix("\\%").removesuffix("%")
-            result = Fraction(numeric)
-            return result / 100 if percent else result
-    except (ValueError, ZeroDivisionError):
-        return None
-    return None
-
-
-def math_answer_equal(prediction: str | None, gold: str) -> bool:
-    if not prediction:
-        return False
-    if _normalize_math_answer(prediction) == _normalize_math_answer(gold):
-        return True
-    predicted_number = _as_fraction(prediction)
-    gold_number = _as_fraction(gold)
-    return (
-        predicted_number is not None
-        and gold_number is not None
-        and predicted_number == gold_number
-    )
-
-
-def _normalize_factual_answer(text: str) -> str:
-    value = unicodedata.normalize("NFKC", str(text)).casefold()
-    value = re.sub(r"[^\w]+", " ", value, flags=re.UNICODE)
-    return " ".join(value.split())
-
-
-def factual_answer_equal(
-    prediction: str | None, gold: str, *, allow_containment: bool
-) -> bool:
-    if not prediction:
-        return False
-    predicted = _normalize_factual_answer(prediction)
-    target = _normalize_factual_answer(gold)
-    if not predicted or not target:
-        return False
-    if predicted == target:
-        return True
-    return allow_containment and f" {target} " in f" {predicted} "
-
-
-def _render_generation_prompt(task: str, question: str) -> str:
-    instruction = (
-        "Solve the mathematics problem. You may show concise reasoning."
-        if task == "math500"
-        else "Answer the factual question concisely."
-    )
-    return (
-        f"{instruction}\n\nQuestion:\n{question}\n\n"
-        "End your response with exactly:\nFinal answer: <answer>"
-    )
-
-
-def _load_external_generation_datasets():
-    from datasets import load_dataset
-
-    return {
-        "math500": load_dataset("HuggingFaceH4/MATH-500", split="test"),
-    }
-
-
-def evaluate_external_generation(model: Any, batch_size: int):
-    """Run the full MATH-500 and SimpleQA splits without lm-eval."""
-    import torch
-
-    tokenizer = model.tokenizer
-    datasets_by_task = _load_external_generation_datasets()
+def build_standard_generation_samples(
+    standard_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Keep auditable raw responses for standardized generation benchmarks."""
     rows: list[dict[str, Any]] = []
-    metrics: dict[str, dict[str, float | int]] = {}
-    max_new_tokens = {"math500": 512}
-
-    for task in EXTERNAL_GENERATION_TASKS:
-        dataset = datasets_by_task[task]
-        strict_correct = 0
-        flexible_correct = 0
-        parse_valid = 0
-        for start in range(0, len(dataset), batch_size):
-            batch = dataset[start : start + batch_size]
-            prompts = [
-                _render_generation_prompt(task, question)
-                for question in batch["problem"]
-            ]
-            if tokenizer.chat_template:
-                prompts = [
-                    tokenizer.apply_chat_template(
-                        [{"role": "user", "content": prompt}],
-                        tokenize=False,
-                        add_generation_prompt=True,
-                    )
-                    for prompt in prompts
-                ]
-            inputs = tokenizer(
-                prompts, return_tensors="pt", padding=True, truncation=True
+    task_aliases = {
+        "minerva_math500": "math500",
+        "humaneval_instruct": "humaneval",
+    }
+    for task_name in STANDARD_GENERATION_TASKS:
+        for sample in standard_result["samples"][task_name]:
+            raw_container = sample.get("resps", sample.get("filtered_resps"))
+            filtered_container = sample.get("filtered_resps")
+            rows.append(
+                {
+                    "task": task_aliases[task_name],
+                    "lm_eval_task": task_name,
+                    "doc_index": int(sample["doc_id"]),
+                    "doc": sample.get("doc"),
+                    "raw_response": _unwrap_response(raw_container),
+                    "filtered_response": (
+                        _unwrap_response(filtered_container)
+                        if filtered_container is not None
+                        else None
+                    ),
+                    "metrics": sample.get("metrics"),
+                }
             )
-            inputs = {
-                key: value.to(model.device) for key, value in inputs.items()
-            }
-            with torch.inference_mode():
-                generated = model.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens[task],
-                    do_sample=False,
-                    eos_token_id=tokenizer.eos_token_id,
-                    pad_token_id=tokenizer.pad_token_id,
-                )
-            responses = tokenizer.batch_decode(
-                generated[:, inputs["input_ids"].shape[1] :],
-                skip_special_tokens=True,
-            )
-            for offset, raw_response in enumerate(responses):
-                index = start + offset
-                gold = str(batch["answer"][offset])
-                parsed = extract_freeform_answer(raw_response)
-                if task == "math500":
-                    strict_ok = math_answer_equal(parsed["strict_answer"], gold)
-                    flexible_ok = math_answer_equal(parsed["flexible_answer"], gold)
-                    sample_id = str(batch["unique_id"][offset])
-                else:
-                    strict_ok = factual_answer_equal(
-                        parsed["strict_answer"], gold, allow_containment=False
-                    )
-                    flexible_ok = factual_answer_equal(
-                        parsed["flexible_answer"], gold, allow_containment=True
-                    )
-                    sample_id = str(index)
-                strict_correct += int(strict_ok)
-                flexible_correct += int(flexible_ok)
-                parse_valid += int(parsed["flexible_parse_valid"])
-                rows.append(
-                    {
-                        "task": task,
-                        "sample_id": sample_id,
-                        "doc_index": index,
-                        "question": batch["problem"][offset],
-                        "gold_answer": gold,
-                        "raw_response": raw_response,
-                        **parsed,
-                        "strict_correct": strict_ok,
-                        "flexible_correct": flexible_ok,
-                    }
-                )
-            print(f"[{task}] {min(start + batch_size, len(dataset))}/{len(dataset)}")
-        count = len(dataset)
-        metrics[task] = {
-            "strict_match": strict_correct / count,
-            "flexible_match": flexible_correct / count,
-            "parse_valid_rate": parse_valid / count,
-            "num_samples": count,
-        }
-    return metrics, rows
+    return rows
 
 
 def _unwrap_response(value: Any) -> str:
@@ -648,52 +403,65 @@ def validate_result_counts(
 
 def build_summary(
     canonical_result: dict[str, Any],
-    generation_result: dict[str, Any],
-    external_metrics: dict[str, dict[str, float | int]],
+    generation_result: dict[str, Any] | None,
+    standard_result: dict[str, Any],
     alignment: dict[str, Any],
 ) -> dict[str, Any]:
     mmlu = _metric(canonical_result, "mmlu")
     piqa = _metric(canonical_result, "piqa")
     boolq = _metric(canonical_result, "boolq")
     ifeval_strict = _metric(canonical_result, "ifeval_prompt_strict")
-    humaneval_pass1 = _metric(canonical_result, "humaneval")
-    mmlu_gen = float(
-        generation_result["groups"]["mmlu_gen"]["generation_accuracy,none"]
-    )
-    closed_generation = {
-        "mmlu": {
-            "accuracy": mmlu_gen,
-            "parse_valid_rate": float(
-                generation_result["groups"]["mmlu_gen"]["parse_valid_rate,none"]
-            ),
-        },
-        "piqa": {
-            "accuracy": _task_metric(
-                generation_result, "piqa_gen", "generation_accuracy,none"
-            ),
-            "parse_valid_rate": _task_metric(
-                generation_result, "piqa_gen", "parse_valid_rate,none"
-            ),
-        },
-        "boolq": {
-            "accuracy": _task_metric(
-                generation_result, "boolq_gen", "generation_accuracy,none"
-            ),
-            "parse_valid_rate": _task_metric(
-                generation_result, "boolq_gen", "parse_valid_rate,none"
-            ),
-        },
-    }
-    closed_generation["average"] = _mean(
-        [
-            mmlu_gen,
-            closed_generation["piqa"]["accuracy"],
-            closed_generation["boolq"]["accuracy"],
-        ]
-    )
+    math500_score = _metric(standard_result, "math500")
+    humaneval_pass1 = _metric(standard_result, "humaneval")
+    if generation_result is None:
+        closed_generation = {"enabled": False}
+    else:
+        mmlu_gen = float(
+            generation_result["groups"]["mmlu_gen"]["generation_accuracy,none"]
+        )
+        closed_generation = {
+            "enabled": True,
+            "mmlu": {
+                "accuracy": mmlu_gen,
+                "parse_valid_rate": float(
+                    generation_result["groups"]["mmlu_gen"]["parse_valid_rate,none"]
+                ),
+            },
+            "piqa": {
+                "accuracy": _task_metric(
+                    generation_result, "piqa_gen", "generation_accuracy,none"
+                ),
+                "parse_valid_rate": _task_metric(
+                    generation_result, "piqa_gen", "parse_valid_rate,none"
+                ),
+            },
+            "boolq": {
+                "accuracy": _task_metric(
+                    generation_result, "boolq_gen", "generation_accuracy,none"
+                ),
+                "parse_valid_rate": _task_metric(
+                    generation_result, "boolq_gen", "parse_valid_rate,none"
+                ),
+            },
+        }
+        closed_generation["average"] = _mean(
+            [
+                mmlu_gen,
+                closed_generation["piqa"]["accuracy"],
+                closed_generation["boolq"]["accuracy"],
+            ]
+        )
     pure_generation = {
-        "math500": external_metrics["math500"],
-        "humaneval": {"pass@1": humaneval_pass1},
+        "math500": {
+            "math_verify": math500_score,
+            "num_samples": _sample_count(standard_result, "minerva_math500"),
+            "lm_eval_task": "minerva_math500",
+        },
+        "humaneval": {
+            "pass@1": humaneval_pass1,
+            "num_samples": _sample_count(standard_result, "humaneval_instruct"),
+            "lm_eval_task": "humaneval_instruct",
+        },
         "ifeval": {
             "prompt_level_strict_acc": ifeval_strict,
             "prompt_level_loose_acc": _metric(canonical_result, "ifeval_prompt_loose"),
@@ -703,7 +471,7 @@ def build_summary(
     }
     pure_generation["average"] = _mean(
         [
-            float(external_metrics["math500"]["flexible_match"]),
+            math500_score,
             humaneval_pass1,
             ifeval_strict,
         ]
@@ -728,7 +496,7 @@ def build_summary(
                 mmlu,
                 piqa,
                 boolq,
-                float(external_metrics["math500"]["flexible_match"]),
+                math500_score,
                 humaneval_pass1,
                 ifeval_strict,
             ]
@@ -762,13 +530,13 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     task_manager = TaskManager(include_path=str(CUSTOM_TASK_DIR))
 
-    print("[1/5] Verifying closed-choice full-document alignment...")
+    print("[1/6] Verifying closed-choice full-document alignment...")
     alignment = build_alignment(task_manager)
-    print("[2/5] Loading model/tokenizer...")
+    print("[2/6] Loading model/tokenizer...")
     model, model_info = load_eval_model(args.model_path, args.batch_size)
     apply_chat_template = model_info["apply_chat_template"]
 
-    print("[3/5] Running canonical mmlu/piqa/boolq/ifeval...")
+    print("[3/6] Running canonical mmlu/piqa/boolq/ifeval...")
     canonical_result = lm_eval.simple_evaluate(
         model=model,
         tasks=list(CANONICAL_TASKS),
@@ -776,40 +544,71 @@ def main() -> None:
         batch_size=args.batch_size,
         apply_chat_template=apply_chat_template,
         log_samples=False,
-        confirm_run_unsafe_code=True,
     )
     if canonical_result is None:
         raise RuntimeError("lm-eval returned no canonical results")
 
-    print("[4/5] Running mmlu_gen/piqa_gen/boolq_gen through lm-eval...")
-    generation_result = lm_eval.simple_evaluate(
+    generation_result = None
+    closed_rows = []
+    if args.include_closed_generation:
+        print("[4/6] Running generated-answer audit for mmlu/piqa/boolq...")
+        generation_result = lm_eval.simple_evaluate(
+            model=model,
+            tasks=list(CLOSED_GENERATION_TASKS),
+            task_manager=task_manager,
+            batch_size=args.batch_size,
+            apply_chat_template=apply_chat_template,
+            log_samples=True,
+        )
+        if generation_result is None:
+            raise RuntimeError("lm-eval returned no closed-generation results")
+        validate_result_counts(canonical_result, generation_result)
+        closed_rows = build_closed_generation_samples(generation_result)
+        expected_rows = sum(
+            _sample_count(generation_result, task_name)
+            for task_name in generation_result["samples"]
+        )
+        if len(closed_rows) != expected_rows:
+            raise AssertionError(
+                "Closed-generation JSONL count mismatch: "
+                f"{len(closed_rows)} != {expected_rows}"
+            )
+    else:
+        print("[4/6] Skipping closed-choice generation audit (log-only default).")
+
+    print("[5/6] Running standardized MATH-500 and HumanEval-Instruct...")
+    standard_result = lm_eval.simple_evaluate(
         model=model,
-        tasks=list(CLOSED_GENERATION_TASKS),
+        tasks=list(STANDARD_GENERATION_TASKS),
         task_manager=task_manager,
         batch_size=args.batch_size,
         apply_chat_template=apply_chat_template,
         log_samples=True,
+        confirm_run_unsafe_code=True,
     )
-    if generation_result is None:
-        raise RuntimeError("lm-eval returned no closed-generation results")
-
-    validate_result_counts(canonical_result, generation_result)
-    closed_rows = build_closed_generation_samples(generation_result)
-    expected_rows = sum(
-        _sample_count(generation_result, task_name)
-        for task_name in generation_result["samples"]
+    if standard_result is None:
+        raise RuntimeError("lm-eval returned no standardized generation results")
+    for task_name, expected_count in EXPECTED_STANDARD_SAMPLE_COUNTS.items():
+        actual_count = _sample_count(standard_result, task_name)
+        if actual_count != expected_count:
+            raise AssertionError(
+                f"{task_name} sample count changed: "
+                f"expected={expected_count}, actual={actual_count}"
+            )
+    standard_rows = build_standard_generation_samples(standard_result)
+    expected_standard_rows = sum(
+        _sample_count(standard_result, task_name)
+        for task_name in STANDARD_GENERATION_TASKS
     )
-    if len(closed_rows) != expected_rows:
+    if len(standard_rows) != expected_standard_rows:
         raise AssertionError(
-            f"Closed-generation JSONL count mismatch: {len(closed_rows)} != {expected_rows}"
+            "Standard-generation JSONL count mismatch: "
+            f"{len(standard_rows)} != {expected_standard_rows}"
         )
 
-    print("[5/5] Running full MATH-500 and SimpleQA generation without lm-eval...")
-    external_metrics, external_rows = evaluate_external_generation(
-        model, args.batch_size
-    )
+    print("[6/6] Building standardized summary and auditable artifacts...")
     summary = build_summary(
-        canonical_result, generation_result, external_metrics, alignment
+        canonical_result, generation_result, standard_result, alignment
     )
 
     _write_json(output_dir / "summary.json", summary)
@@ -818,23 +617,30 @@ def main() -> None:
         output_dir / "detailed_lm_eval.json",
         {
             "canonical": {k: v for k, v in canonical_result.items() if k != "samples"},
-            "closed_generation": {
-                k: v for k, v in generation_result.items() if k != "samples"
+            "closed_generation": (
+                {k: v for k, v in generation_result.items() if k != "samples"}
+                if generation_result is not None
+                else {"enabled": False}
+            ),
+            "standard_generation": {
+                k: v for k, v in standard_result.items() if k != "samples"
             },
-            "external_generation": external_metrics,
             "primary_metric_keys": PRIMARY_METRICS,
         },
     )
-    with (output_dir / "closed_generation_samples.jsonl").open(
-        "w", encoding="utf-8"
-    ) as handle:
-        for row in closed_rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if generation_result is not None:
+        with (output_dir / "closed_generation_samples.jsonl").open(
+            "w", encoding="utf-8"
+        ) as handle:
+            for row in closed_rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
     with (output_dir / "generation_only_samples.jsonl").open(
         "w", encoding="utf-8"
     ) as handle:
-        for row in external_rows:
-            handle.write(json.dumps(row, ensure_ascii=False))
+        for row in standard_rows:
+            handle.write(
+                json.dumps(row, ensure_ascii=False, default=_json_default)
+            )
             handle.write("\n")
     _write_json(
         output_dir / "run_config.json",
@@ -843,15 +649,16 @@ def main() -> None:
             "batch_size": args.batch_size,
             "lm_eval_version": importlib.metadata.version("lm-eval"),
             "canonical_lm_eval_tasks": list(CANONICAL_TASKS),
-            "closed_generation_lm_eval_tasks": list(CLOSED_GENERATION_TASKS),
-            "external_generation_tasks": {
-                "math500": {
-                    "dataset": "HuggingFaceH4/MATH-500",
-                    "config": "default",
-                    "split": "test",
-                    "max_new_tokens": 512,
-                }
-            },
+            "closed_generation_enabled": args.include_closed_generation,
+            "closed_generation_lm_eval_tasks": (
+                list(CLOSED_GENERATION_TASKS)
+                if args.include_closed_generation
+                else []
+            ),
+            "standard_generation_lm_eval_tasks": list(
+                STANDARD_GENERATION_TASKS
+            ),
+            "standard_generation_log_samples": True,
             "full_evaluation": True,
             "limit": None,
             "closed_generation_kwargs": {

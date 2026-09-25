@@ -27,11 +27,28 @@ def _normalize_choice_text(text: str) -> str:
 def extract_mc_answer(
     text: str, valid_labels: list[str], choices: list[str]
 ) -> dict[str, str | bool | None]:
-    """Extract one answer without treating incidental label letters as answers."""
+    """Extract one answer without treating incidental label letters as answers.
+
+    Models do not always reproduce the requested format literally. In particular,
+    instruction-tuned models often render ``<letter>`` from the prompt as an XML
+    element, or append the selected choice text after the label. Those are still
+    unambiguous answers and should not be counted as parse failures.
+    """
     valid = {str(label).upper() for label in valid_labels}
     output = str(text)
 
-    def candidate_label(candidate: str) -> str | None:
+    def candidate_label(
+        candidate: str, *, allow_trailing_explanation: bool = False
+    ) -> str | None:
+        letter_tag = re.fullmatch(
+            r"\s*<\s*letter\s*>\s*([A-Za-z])\s*"
+            r"(?:<\s*/\s*letter\s*>|>)?\s*[.。]?\s*",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        if letter_tag and letter_tag.group(1).upper() in valid:
+            return letter_tag.group(1).upper()
+
         label_match = re.fullmatch(
             r"\s*(?:(?:option|choice)\s+)?(?:\(\s*|\[\s*)?"
             r"([A-Za-z])(?:\s*\)|\s*\])?[.。]?\s*",
@@ -51,10 +68,35 @@ def extract_mc_answer(
             index = matching_indices[0]
             if index < len(valid_labels):
                 return valid_labels[index].upper()
+
+        labelled_choice = re.fullmatch(
+            r"\s*(?:(?:option|choice)\s+)?(?:\(\s*|\[\s*)?"
+            r"([A-Za-z])(?:\s*\)|\s*\])?"
+            r"(?:\s*[.。,:;\-–—]\s*|\s+)(.+?)\s*",
+            candidate,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if labelled_choice and labelled_choice.group(1).upper() in valid:
+            label = labelled_choice.group(1).upper()
+            if allow_trailing_explanation:
+                return label
+            label_index = valid_labels.index(label)
+            if label_index < len(choices) and (
+                _normalize_choice_text(labelled_choice.group(2))
+                == _normalize_choice_text(choices[label_index])
+            ):
+                return label
         return None
 
-    def parsed(candidate: str, method: str) -> dict[str, str | bool | None] | None:
-        label = candidate_label(candidate)
+    def parsed(
+        candidate: str,
+        method: str,
+        *,
+        allow_trailing_explanation: bool = False,
+    ) -> dict[str, str | bool | None] | None:
+        label = candidate_label(
+            candidate, allow_trailing_explanation=allow_trailing_explanation
+        )
         if label is None:
             return None
         return {
@@ -69,19 +111,76 @@ def extract_mc_answer(
         flags=re.IGNORECASE | re.DOTALL,
     )
     for candidate in reversed(xml_matches):
-        if result := parsed(candidate, "xml_answer"):
+        if result := parsed(
+            candidate, "xml_answer", allow_trailing_explanation=True
+        ):
             return result
 
-    anchored_pattern = re.compile(
-        r"(?:^|\n)\s*(?:the\s+correct\s+answer|the\s+answer|final\s+answer|answer)"
-        r"\s*(?::\s*|\s+is\s+)([^\n]+?)\s*(?=$|\n)",
+    # The answer is often on the next non-empty line after the marker.
+    anchored_candidates: list[str] = []
+    lines = output.splitlines()
+    answer_marker = re.compile(
+        r"(?:^|\b)(?:(?:the\s+)?(?:best|correct|final)\s+answer|"
+        r"(?:the\s+)?answer)\s*(?::|=|\bis\b\s*:?)\s*(.*)$",
         flags=re.IGNORECASE,
     )
-    for candidate in reversed(anchored_pattern.findall(output)):
-        if result := parsed(candidate, "anchored_final_answer"):
+    for index, line in enumerate(lines):
+        marker = answer_marker.search(line)
+        if marker is None:
+            continue
+        candidate = marker.group(1).strip()
+        if not candidate:
+            candidate = next(
+                (later.strip() for later in lines[index + 1 :] if later.strip()),
+                "",
+            )
+        if candidate:
+            anchored_candidates.append(candidate)
+    for candidate in reversed(anchored_candidates):
+        if result := parsed(
+            candidate,
+            "anchored_final_answer",
+            allow_trailing_explanation=True,
+        ):
+            return result
+
+    letter_payloads = re.findall(
+        r"<\s*letter\s*>(.*?)<\s*/\s*letter\s*>",
+        output,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for candidate in reversed(letter_payloads):
+        candidate = re.sub(
+            r"^\s*(?:final\s+answer|answer)\s*(?::|=|\bis\b)?\s*",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        if result := parsed(candidate, "xml_letter"):
+            return result
+
+    letter_tags = re.findall(
+        r"<\s*letter\s*>\s*([A-Za-z])\s*(?:<\s*/\s*letter\s*>|>)?",
+        output,
+        flags=re.IGNORECASE,
+    )
+    for candidate in reversed(letter_tags):
+        if result := parsed(candidate, "xml_letter"):
+            return result
+
+    # A label plus its exact corresponding choice is unambiguous even without
+    # an explicit "answer" marker.
+    for candidate in reversed([line.strip() for line in lines if line.strip()]):
+        if result := parsed(candidate, "labelled_choice"):
             return result
 
     if result := parsed(output, "whole_output_answer"):
+        return result
+
+    # Recover concise natural-language answers such as "... is 4" without
+    # treating arbitrary choice mentions in reasoning as answers.
+    tail = re.search(r"(?:\bis\b|:)\s*([^\n]+?)\s*$", output, re.IGNORECASE)
+    if tail and (result := parsed(tail.group(1), "final_choice_text")):
         return result
 
     return {
@@ -97,11 +196,12 @@ def format_mc_prompt(question: str, choices: Sequence[str]) -> str:
     rendered_choices = "\n".join(
         f"{LABELS[index]}. {choice}" for index, choice in enumerate(choices)
     )
+    allowed_labels = ", ".join(LABELS[: len(choices)])
     return (
         f"Question:\n{question}\n\nChoices:\n{rendered_choices}\n\n"
-        "Select the single best answer.\n"
-        "End your response with:\n"
-        "Final answer: <letter>"
+        f"Select the single best answer. Reply with exactly one of these capital "
+        f"letters: {allowed_labels}. Do not include an explanation, punctuation, "
+        "or XML tags."
     )
 
 
