@@ -15,6 +15,9 @@ wheels/
 
 # Experiment outputs: checkpoints, reports and logs stay out of source control
 artifacts/
+/sdft-analysis-*.tar.gz
+/claude-session-*.json
+/claude-session-*.md
 outputs/
 reports/
 wandb/
