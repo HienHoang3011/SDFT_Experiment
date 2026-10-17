@@ -1,5 +1,0 @@
-dataset_name: electrical_engineering
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_electrical_engineering
-task_alias: electrical_engineering

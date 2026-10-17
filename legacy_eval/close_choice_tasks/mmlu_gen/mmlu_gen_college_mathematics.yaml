@@ -1,5 +1,0 @@
-dataset_name: college_mathematics
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_college_mathematics
-task_alias: college_mathematics

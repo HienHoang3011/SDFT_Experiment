@@ -1,5 +1,0 @@
-dataset_name: us_foreign_policy
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_us_foreign_policy
-task_alias: us_foreign_policy

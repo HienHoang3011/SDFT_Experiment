@@ -5,20 +5,38 @@ build/
 dist/
 wheels/
 *.egg-info
-outputs/
-reports/
-reports-qwen2/
-artifacts/
-*.log
-ouputs/
-evals_and_steer_images/
-/outputs-qwen2/*-qwen2-7b/
-/data/cf_benchmarks/
+.pytest_cache/
+
 # Virtual environments
 .venv
-*.sh
-!run_samsum_stable.sh
-outputs-qwen2
-# Hugging Face & Dataset Cache
+
+# Secrets (the current key file is named ".env " with a trailing space)
+.env*
+
+# Experiment outputs: checkpoints, reports and logs stay out of source control
+artifacts/
+outputs/
+reports/
+wandb/
+*.log
+/data/cf_benchmarks/
+
+# Model weights and checkpoints, wherever they end up
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.onnx
+models/
+checkpoint-*/
+
+# Hugging Face & dataset cache
 cache-*.arrow
 .cache/
+
+# Shell scripts are ignored unless listed here
+*.sh
+!run_fp32_master_rerun.sh
+!scripts/*.sh

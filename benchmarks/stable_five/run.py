@@ -1,4 +1,4 @@
-"""Reproduce the five retained SAMSum 2-epoch capability benchmarks."""
+"""Reproduce the five capability benchmarks for the six-method SAMSum run."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import csv
 import gc
 import importlib.metadata
 import json
+import os
 import re
 import subprocess
 import sys
@@ -16,19 +17,20 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT = ROOT / "artifacts/samsum/stable-2epoch/stable-five"
+DEFAULT_ARTIFACT = ROOT / "artifacts/samsum/fair-methods-2epoch-log25-tmux"
+DEFAULT_OUTPUT = DEFAULT_ARTIFACT / "stable-five"
 LM_EVAL_VERSION = "0.4.12"
 MODELS = {
-    "base": "Qwen/Qwen2-7B",
-    "full_sft": str(ROOT / "artifacts/samsum/stable-2epoch/models/full_sft"),
-    "lora": str(ROOT / "artifacts/samsum/stable-2epoch/models/lora"),
+    "base": str(ROOT / "artifacts/base/Qwen2-7B"),
+    **{name: str(DEFAULT_ARTIFACT / "models" / name)
+       for name in ("full_sft", "lora", "steer_lora", "steer_full", "fapm")},
 }
 TASKS = {
     "gsm8k_cot_zeroshot": {
         "metric": "exact_match,flexible-extract",
         "num_fewshot": 0,
         "batch_size": 1,
-        "gen_kwargs": None,
+        "gen_kwargs": {"max_gen_toks": 1024, "do_sample": False},
         "expected_samples": 1319,
     },
     "humaneval_instruct": {
@@ -68,6 +70,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--model-path", action="append", default=[], metavar="NAME=PATH",
                         help="Add or override a model for a common five-task evaluation")
     parser.add_argument("--models", nargs="+", default=None)
+    parser.add_argument("--tasks", nargs="+", choices=list(TASKS), default=list(TASKS),
+                        help="Evaluate only the selected benchmark tasks")
     parser.add_argument("--worker", help=argparse.SUPPRESS)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
@@ -242,7 +246,7 @@ def run_worker(args: argparse.Namespace) -> None:
     output = args.output_dir / "models" / model_name
     output.mkdir(parents=True, exist_ok=True)
     pending = []
-    for task in TASKS:
+    for task in args.tasks:
         result_path = output / f"{task}.json"
         if result_path.exists() and not args.force:
             validate_existing(result_path, model_name, task, args.model_paths[model_name])
@@ -271,19 +275,30 @@ def run_worker(args: argparse.Namespace) -> None:
             # evaluating a different checkpoint after the first task).
             model, model_info = load_eval_model(args.model_paths[model_name], batch_size)
         print(f"[run] model={model_name} task={task} batch={batch_size}", flush=True)
-        result = lm_eval.simple_evaluate(
-            model=model,
-            tasks=[task],
-            task_manager=task_manager,
-            num_fewshot=settings["num_fewshot"],
-            batch_size=batch_size,
-            apply_chat_template=model_info["apply_chat_template"],
-            gen_kwargs=settings["gen_kwargs"],
-            limit=None,
-            log_samples=True,
-            confirm_run_unsafe_code=task == "humaneval_instruct",
-            bootstrap_iters=0,
-        )
+        previous_code_eval = os.environ.get("HF_ALLOW_CODE_EVAL")
+        if task == "humaneval_instruct":
+            # evaluate's code_eval metric has a separate opt-in from lm-eval.
+            os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+        try:
+            result = lm_eval.simple_evaluate(
+                model=model,
+                tasks=[task],
+                task_manager=task_manager,
+                num_fewshot=settings["num_fewshot"],
+                batch_size=batch_size,
+                apply_chat_template=model_info["apply_chat_template"],
+                gen_kwargs=settings["gen_kwargs"],
+                limit=None,
+                log_samples=True,
+                confirm_run_unsafe_code=task == "humaneval_instruct",
+                bootstrap_iters=0,
+            )
+        finally:
+            if task == "humaneval_instruct":
+                if previous_code_eval is None:
+                    os.environ.pop("HF_ALLOW_CODE_EVAL", None)
+                else:
+                    os.environ["HF_ALLOW_CODE_EVAL"] = previous_code_eval
         if result is None:
             raise RuntimeError(f"lm-eval returned no result for {model_name}/{task}")
         count = sample_count(result, task)
@@ -311,7 +326,7 @@ def run_worker(args: argparse.Namespace) -> None:
 
 def write_report(args: argparse.Namespace) -> None:
     rows = []
-    for task in TASKS:
+    for task in args.tasks:
         for model in args.models:
             path = args.output_dir / "models" / model / f"{task}.json"
             if path.exists():
@@ -334,14 +349,14 @@ def write_report(args: argparse.Namespace) -> None:
     if "base" in args.models:
         headers.extend(f"{model} − Base" for model in comparison)
     lines = [
-        "# Stable five benchmark comparison",
+        "# Capability benchmark comparison",
         "",
         "Full evaluation splits; scores are percentages; gap columns are percentage points.",
         "",
         "| " + " | ".join(headers) + " |",
         "|" + "|".join(["---"] + ["---:"] * (len(headers) - 1)) + "|",
     ]
-    for task in TASKS:
+    for task in args.tasks:
         scores = {
             model: by_pair[(task, model)]["score"] if (task, model) in by_pair else None
             for model in args.models
@@ -360,7 +375,11 @@ def write_report(args: argparse.Namespace) -> None:
                 )
         lines.append("| " + " | ".join(cells) + " |")
     (args.output_dir / "results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    atomic_json(args.output_dir / "summary.json", {"models": args.model_paths, "tasks": TASKS, "rows": rows})
+    atomic_json(args.output_dir / "summary.json", {
+        "models": args.model_paths,
+        "tasks": {task: TASKS[task] for task in args.tasks},
+        "rows": rows,
+    })
     print("\n".join(lines), flush=True)
 
 
@@ -377,6 +396,7 @@ def main() -> None:
         command = [sys.executable, str(Path(__file__).resolve()), "--worker", model, "--output-dir", str(args.output_dir)]
         for specification in args.model_path:
             command.extend(("--model-path", specification))
+        command.extend(("--tasks", *args.tasks))
         if args.force:
             command.append("--force")
         subprocess.run(command, cwd=ROOT, check=True)

@@ -641,7 +641,8 @@ def parse_args():
     parser.add_argument("--num_train_epochs", type=int, default=2)
     parser.add_argument("--max_seq_length", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--x_factor", type=float, default=1.0)
+    parser.add_argument("--x_factor", type=float, default=1.5,
+                        help="Margin log(1 + x_factor); every completed Steer run used 1.5")
     parser.add_argument(
         "--kl_probe_samples",
         type=int,
@@ -660,6 +661,16 @@ def parse_args():
         help="Disable base-vs-finetuned output-distribution KL monitoring",
     )
     parser.add_argument("--disable_peft", action="store_true", help="Vô hiệu hóa LoRA (Full Fine-Tuning)")
+    parser.add_argument("--base_kl_weight", type=float, default=0.0,
+                        help="Add KL(frozen base || model); requires LoRA; 0 preserves ordinary Steer")
+    parser.add_argument("--max_steps", type=int, default=-1, help="Optional step limit for smoke checks")
+    parser.add_argument("--full_ft_dtype", choices=["float32", "bfloat16"], default="float32",
+                        help="Stored weight dtype with --disable_peft. float32 keeps master weights; "
+                             "pure bfloat16 rounds away lr=1e-5 updates on |w| >= 2^-8. LoRA keeps a bf16 base.")
+    parser.add_argument("--optim", type=str, default="adamw_8bit",
+                        help="Optimizer; paged_adamw_8bit is the same update with paged states")
+    parser.add_argument("--max_train_samples", type=int, default=0)
+    parser.add_argument("--max_eval_samples", type=int, default=0)
     return parser.parse_args()
 
 def prepare_train_dataset(dataset_path):
@@ -695,9 +706,17 @@ def prepare_train_dataset(dataset_path):
 
 def main():
     args = parse_args()
-    
+    if not math.isfinite(args.base_kl_weight) or args.base_kl_weight < 0:
+        raise ValueError("base_kl_weight must be finite and nonnegative")
+    if args.base_kl_weight and args.disable_peft:
+        raise ValueError("The shared frozen-base anchor requires LoRA")
+
     train_dataset = prepare_train_dataset(args.train_data_path)
     eval_dataset = prepare_train_dataset(args.dev_data_path)
+    if args.max_train_samples > 0:
+        train_dataset = train_dataset.select(range(min(len(train_dataset), args.max_train_samples)))
+    if args.max_eval_samples > 0:
+        eval_dataset = eval_dataset.select(range(min(len(eval_dataset), args.max_eval_samples)))
     
     training_args = SFTConfig(
         output_dir=args.output_dir,
@@ -706,13 +725,16 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         num_train_epochs=args.num_train_epochs,
+        max_steps=args.max_steps,
         max_length=args.max_seq_length,
         assistant_only_loss=True,
         # A custom logits-based loss needs the regular LM head output. Keeping
         # TRL's default chunked_nll would patch a labels-only path that this
         # compute_loss_func cannot use.
         loss_type="nll",
-        model_init_kwargs={"dtype": "bfloat16"},
+        # LoRA adapters are fp32 over a frozen bf16 base. Full fine-tuning needs
+        # fp32 stored weights, or AdamW steps vanish in bf16 rounding.
+        model_init_kwargs={"dtype": args.full_ft_dtype if args.disable_peft else "bfloat16"},
         average_tokens_across_devices=True,
         warmup_ratio=0.03,
         lr_scheduler_type="cosine",
@@ -721,14 +743,12 @@ def main():
         logging_steps=1,
         eval_strategy="steps",
         eval_steps=0.2,
-        save_strategy="steps",
-        save_steps=100,
-        save_total_limit=1,
+        save_strategy="no",
         report_to="none",
         bf16=True,
         fp16=False,
         gradient_checkpointing=True,
-        optim="adamw_torch",
+        optim=args.optim,
         seed=args.seed,
         data_seed=args.seed,
     )
@@ -763,7 +783,13 @@ def main():
         metric_accumulator=steer_metric_accumulator,
     )
 
-    trainer = SFTTrainer(
+    trainer_class = SFTTrainer
+    if args.base_kl_weight > 0:
+        from base_anchored_steer import BaseAnchoredLoss, BaseAnchoredSFTTrainer
+        steered_loss = BaseAnchoredLoss(steered_loss, args.base_kl_weight)
+        trainer_class = BaseAnchoredSFTTrainer
+
+    trainer = trainer_class(
         model=args.model_name_or_path,
         args=training_args,
         train_dataset=train_dataset,
@@ -788,6 +814,13 @@ def main():
         kl_callback.bind_trainer(trainer)
         trainer.add_callback(kl_callback)
         kl_callback.capture_base()
+
+    if args.base_kl_weight > 0 and trainer.is_world_process_zero():
+        import json
+        manifest = vars(args).copy()
+        manifest.update({"method": "steer_lora_base_anchor", "objective": "Steer + base_kl_weight * KL(base || model)", "reference": "Frozen base weights, adapters disabled, eval mode, identical assistant-only prefixes", "anchor_temperature": 1.0})
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        (Path(args.output_dir) / "anchor_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     print("\nBắt đầu quá trình huấn luyện Steered SFT...")
     trainer.train()

@@ -1,5 +1,0 @@
-dataset_name: computer_security
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_computer_security
-task_alias: computer_security

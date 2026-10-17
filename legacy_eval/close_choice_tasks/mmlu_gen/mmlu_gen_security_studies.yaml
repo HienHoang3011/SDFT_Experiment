@@ -1,5 +1,0 @@
-dataset_name: security_studies
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_security_studies
-task_alias: security_studies

@@ -16,8 +16,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient_accumulation_steps", required=True, type=int)
     parser.add_argument("--max_sequence_length", required=True, type=int)
     parser.add_argument("--seed", required=True, type=int)
-    parser.add_argument("--fisher_max_samples", required=True, type=int)
-    parser.add_argument("--ewc_lambda", required=True, type=float)
     parser.add_argument("--steer_x_factor", required=True, type=float)
     parser.add_argument("--fapm_k_ratio", required=True, type=float)
     return parser.parse_args()
@@ -28,29 +26,21 @@ def main() -> None:
     manifest = {
         "run_name": args.run_name,
         "dataset": "SAMSum (EMNLP 2019), mirror fastlayne/samsum",
-        "models": ["base", "full_sft", "lora", "ewc", "steer_lora", "steer_full", "fapm"],
+        "models": ["base", "full_sft", "lora", "steer_lora", "steer_full", "fapm"],
         "shared_training": {
             "epochs": args.epochs,
             "learning_rate": args.learning_rate,
             "per_device_batch_size": args.per_device_batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "max_sequence_length": args.max_sequence_length,
-            "optimizer": "AdamW",
+            "optimizer": "AdamW 8-bit (bitsandbytes)",
             "scheduler": "cosine",
             "warmup_ratio": 0.03,
             "weight_decay": 0.1,
             "seed": args.seed,
         },
-        "intended_difference": "Shared SAMSum train/dev schedule; EWC adds a Fisher-weighted anchor to the initial model using only SAMSum train; FAPM post-processes Full SFT.",
-        "ewc": {
-            "fisher_source": "SAMSum train split, sampled before fine-tuning",
-            "fisher_objective": "per-example mean assistant-token NLL gradient squared",
-            "fisher_max_samples": args.fisher_max_samples,
-            "anchor": "initial base model weights",
-            "interpretation": "Fisher-weighted regularization for SAMSum adaptation; not prior-task continual-learning EWC",
-            "lambda": args.ewc_lambda,
-        },
-        "steer": {"x_factor": args.steer_x_factor, "lora_and_full": True},
+        "intended_difference": "Shared SAMSum train/dev schedule; FAPM post-processes Full SFT.",
+        "steer": {"x_factor": args.steer_x_factor, "margin": "log(1 + x_factor)", "lora_and_full": True},
         "fapm": {"k_ratio": args.fapm_k_ratio, "source": "full_sft"},
         "lora_parameterization": {
             "rank": 256,

@@ -1,5 +1,0 @@
-dataset_name: elementary_mathematics
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_elementary_mathematics
-task_alias: elementary_mathematics

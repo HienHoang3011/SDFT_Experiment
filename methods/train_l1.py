@@ -34,6 +34,8 @@ def parse_args():
         default=1e-8,
         help="Coefficient for lambda * sum(abs(trainable parameters)); tune on dev data.",
     )
+    parser.add_argument("--model_dtype", choices=["float32", "bfloat16"], default="float32",
+                        help="Stored weight dtype; pure bfloat16 rounds away small optimizer steps")
     args = parser.parse_args()
     if args.l1_lambda < 0:
         parser.error("l1_lambda must be nonnegative")
@@ -87,7 +89,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         device_map="auto",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=getattr(torch, args.model_dtype),
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     configure_qwen2_base_tokenizer(tokenizer, args.model_name_or_path)

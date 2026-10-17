@@ -23,9 +23,10 @@ def main():
     ).eval()
     
     print(f"[FAPM] Đang load SFT Model: {args.sft_model}")
+    # Load SFT ở fp32: ép về bf16 trước khi trừ sẽ làm tròn mất phần lớn task vector.
     model_sft = AutoModelForCausalLM.from_pretrained(
-        args.sft_model, 
-        torch_dtype=torch.bfloat16, 
+        args.sft_model,
+        torch_dtype=torch.float32,
         device_map="cpu", 
         trust_remote_code=True
     ).eval()
@@ -42,8 +43,9 @@ def main():
             
         # Không can thiệp vào embedding hoặc layernorm nếu cần, nhưng code gốc áp dụng cho mọi param.
         # Nếu RAM GPU ít, có thể chạy trên CPU nhưng chậm hơn. Ở đây ta chuyển tensor sang GPU để tính toán nhanh, sau đó chuyển lại.
-        w_base = weights[key].cuda()
-        w_sft = weights_sft[key].cuda()
+        # Tính task vector và điểm t ở fp32; chỉ kết quả merge được ép về dtype của Base.
+        w_base = weights[key].cuda().float()
+        w_sft = weights_sft[key].cuda().float()
         
         # Task vector
         tensor = w_sft - w_base
@@ -67,7 +69,7 @@ def main():
         tensor.mul_(mask)
         
         # Merge
-        weights[key] = (w_base + tensor).cpu()
+        weights[key] = (w_base + tensor).to(value.dtype).cpu()
         
         # Clean up memory
         del w_base, w_sft, tensor, t, mask

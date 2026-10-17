@@ -18,8 +18,8 @@ QWEN2_BASE_CHAT_TEMPLATE = (
 )
 
 # Same rendered ChatML text as the checkpoint template. The Jinja generation
-# block only adds metadata: assistant content and <|im_end|> become the loss
-# span, while role headers, system text, and user text stay masked.
+# block only adds metadata: assistant content, <|im_end|> and the newline after it
+# become the loss span, while role headers, system text, and user text stay masked.
 QWEN2_BASE_TRAINING_CHAT_TEMPLATE = (
     "{% for message in messages %}"
     "{% if loop.first and messages[0]['role'] != 'system' %}"

@@ -1,5 +1,0 @@
-dataset_name: college_chemistry
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_college_chemistry
-task_alias: college_chemistry

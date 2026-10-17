@@ -1,5 +1,0 @@
-dataset_name: abstract_algebra
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_abstract_algebra
-task_alias: abstract_algebra

@@ -1,5 +1,0 @@
-dataset_name: miscellaneous
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_miscellaneous
-task_alias: miscellaneous

@@ -1,5 +1,0 @@
-dataset_name: professional_accounting
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_professional_accounting
-task_alias: professional_accounting

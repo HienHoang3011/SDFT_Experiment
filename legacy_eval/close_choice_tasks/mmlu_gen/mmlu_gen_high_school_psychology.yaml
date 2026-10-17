@@ -1,5 +1,0 @@
-dataset_name: high_school_psychology
-tag: mmlu_gen_tasks
-include: _default_template_yaml
-task: mmlu_gen_high_school_psychology
-task_alias: high_school_psychology

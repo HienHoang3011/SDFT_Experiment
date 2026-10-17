@@ -31,6 +31,12 @@ def parse_args():
                         help="Maximum sequence length")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for deterministic data ordering")
+    parser.add_argument("--model_dtype", choices=["float32", "bfloat16"], default="float32",
+                        help="Stored weight dtype. float32 keeps master weights; bf16=True still "
+                             "autocasts compute. Pure bfloat16 rounds away lr=1e-5 updates on |w| >= 2^-8.")
+    parser.add_argument("--optim", type=str, default="adamw_8bit",
+                        help="Optimizer; paged_adamw_8bit is the same update with paged states")
+    parser.add_argument("--max_steps", type=int, default=-1, help="Optional step limit for smoke checks")
     return parser.parse_args()
 
 def prepare_train_dataset(dataset_path):
@@ -89,14 +95,13 @@ def main():
         warmup_ratio=0.03,
         lr_scheduler_type="cosine",
         weight_decay=0.1,
-        optim="adamw_torch",
+        optim=args.optim,
+        max_steps=args.max_steps,
         max_grad_norm=1.0,
         logging_steps=1,
         eval_strategy="steps",
         eval_steps=0.2,
-        save_strategy="steps",
-        save_steps=100,
-        save_total_limit=1,
+        save_strategy="no",
         report_to="none",
         bf16=True,
         fp16=False,
@@ -111,7 +116,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         device_map="auto",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=getattr(torch, args.model_dtype),
     )
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
