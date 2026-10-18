@@ -37,7 +37,35 @@ def parse_args():
     parser.add_argument("--optim", type=str, default="adamw_8bit",
                         help="Optimizer; paged_adamw_8bit is the same update with paged states")
     parser.add_argument("--max_steps", type=int, default=-1, help="Optional step limit for smoke checks")
+    parser.add_argument("--freeze_layers", type=str, default=None,
+                        help="Transformer layers to freeze, e.g. '0-6' or '21-27' (0-based, inclusive)")
+    parser.add_argument("--freeze_embeddings", action="store_true", help="Also freeze embed_tokens")
+    parser.add_argument("--freeze_head", action="store_true", help="Also freeze the final norm and lm_head")
+    parser.add_argument("--save_dtype", choices=["float32", "bfloat16"], default="float32",
+                        help="dtype of the saved checkpoint; bfloat16 halves disk and matches bf16 evaluation")
     return parser.parse_args()
+
+
+def freeze_parameters(model, layers, embeddings, head):
+    """Freeze the requested blocks; returns (frozen, total) parameter counts."""
+    frozen_layers = set()
+    if layers:
+        start, end = (int(x) for x in layers.split("-"))
+        frozen_layers = set(range(start, end + 1))
+    for name, param in model.named_parameters():
+        parts = name.split(".")
+        in_layer = "layers" in parts and int(parts[parts.index("layers") + 1]) in frozen_layers
+        is_embed = embeddings and "embed_tokens" in name
+        is_head = head and (name.startswith("lm_head") or name == "model.norm.weight")
+        if in_layer or is_embed or is_head:
+            param.requires_grad_(False)
+    if embeddings:
+        # With gradient checkpointing, a frozen embedding output carries no grad and the
+        # checkpointed blocks above it would receive none either.
+        model.enable_input_require_grads()
+    total = sum(p.numel() for p in model.parameters())
+    frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    return frozen, total
 
 def prepare_train_dataset(dataset_path):
     print(f"Loading train dataset from {dataset_path}")
@@ -128,6 +156,10 @@ def main():
     if configured_qwen2_base:
         sync_model_special_tokens(model, tokenizer)
     model.config.use_cache = False
+    if args.freeze_layers or args.freeze_embeddings or args.freeze_head:
+        frozen, total = freeze_parameters(model, args.freeze_layers, args.freeze_embeddings, args.freeze_head)
+        print(f"[INFO] Frozen {frozen:,} / {total:,} parameters ({100 * frozen / total:.1f}%): "
+              f"layers={args.freeze_layers} embeddings={args.freeze_embeddings} head={args.freeze_head}")
     print(f"\nKhởi tạo SFTTrainer với model: {args.model_name_or_path}")
     
     trainer = SFTTrainer(
@@ -141,6 +173,8 @@ def main():
     print("\nBắt đầu quá trình huấn luyện SFT...")
     trainer.train()
     
+    if args.save_dtype == "bfloat16":
+        trainer.model.to(torch.bfloat16)
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     import shutil, glob
